@@ -1,5 +1,6 @@
 import asyncio
 from urllib.parse import urlparse, parse_qs
+import uuid
 import random
 import ssl
 import base64
@@ -11,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone
 from pathlib import Path
 import argparse
+import redis
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -45,6 +47,14 @@ if not 0.0 <= args.failure_rate <= 1.0:
 NAME = args.name
 HOST = "0.0.0.0"
 PORT = args.port
+REDIS_HOST = "YOUR_REDIS_IP"
+REDIS_PORT = 6379
+
+redis_client = redis.Redis(
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    decode_responses=True,
+)
 
 DB_PATH = Path(__file__).with_name("chat.db")
 KEY_PATH = Path(__file__).with_name("encryption.key")
@@ -102,7 +112,7 @@ def init_db():
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT PRIMARY KEY,
                 username TEXT NOT NULL,
                 public_key TEXT NOT NULL,
                 ciphertext BLOB NOT NULL,
@@ -114,14 +124,14 @@ def init_db():
         )
 
 
-def store_message(username, public_key, ciphertext, nonce, signature, timestamp):
+def store_message(message_id, username, public_key, ciphertext, nonce, signature, timestamp):
     """Save a chat message and return its timestamp."""
     #timestamp = datetime.now(timezone.utc).isoformat()
 
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute(
-            "INSERT INTO messages (username, public_key, ciphertext, nonce, signature, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (username, public_key, ciphertext, nonce, signature, timestamp),
+            "INSERT OR IGNORE INTO messages (id, username, public_key, ciphertext, nonce, signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (message_id, username, public_key, ciphertext, nonce, signature, timestamp),
         )
 
 
@@ -131,7 +141,7 @@ def load_history(limit=HISTORY_LIMIT):
     with sqlite3.connect(DB_PATH) as connection:
         rows = connection.execute(
             """
-            SELECT username, public_key, ciphertext, nonce, signature, timestamp
+            SELECT id, username, public_key, ciphertext, nonce, signature, timestamp
             FROM messages
             ORDER BY id DESC
             LIMIT ?
@@ -140,8 +150,8 @@ def load_history(limit=HISTORY_LIMIT):
         ).fetchall()
 
     return [
-            {"username": username, "public_key": public_key, "ciphertext": base64.b64encode(ciphertext).decode(), "nonce": base64.b64encode(nonce).decode(), "signature": base64.b64encode(signature).decode(), "timestamp": timestamp}
-        for username, public_key, ciphertext, nonce, signature, timestamp in reversed(rows)
+            {"message_id": idd, "username": username, "public_key": public_key, "ciphertext": base64.b64encode(ciphertext).decode(), "nonce": base64.b64encode(nonce).decode(), "signature": base64.b64encode(signature).decode(), "timestamp": timestamp}
+        for idd, username, public_key, ciphertext, nonce, signature, timestamp in reversed(rows)
     ]
 
 def save_public_key(username, public_key):
@@ -471,22 +481,39 @@ async def handle_client(websocket):
                 timezone.utc
             ).isoformat()
 
-            await asyncio.to_thread(
-                store_message,
-                username,
-                public_keys[username],
-                ciphertext,
-                nonce,
-                signature,
-                timestamp
+            message_id = str(uuid.uuid4())
+
+            payload = {
+                "id": message_id,
+                "username": username,
+                "public_key": public_keys[username],
+                "ciphertext": base64.b64encode(ciphertext).decode(),
+                "nonce": base64.b64encode(nonce).decode(),
+                "signature": base64.b64encode(signature).decode(),
+                "timestamp": timestamp,
+            }
+
+            redis_client.publish(
+                "chat_messages",
+                json.dumps(payload),
             )
 
-            await broadcast({
-                "type": "chat",
-                "username": username,
-                "content": message,
-                "timestamp": timestamp,
-            })
+            #await asyncio.to_thread(
+            #    store_message,
+            #    username,
+            #    public_keys[username],
+            #    ciphertext,
+            #    nonce,
+            #    signature,
+            #    timestamp
+            #)
+
+            #await broadcast({
+            #    "type": "chat",
+            #    "username": username,
+            #    "content": message,
+            #    "timestamp": timestamp,
+            #})
 
     except ConnectionClosed:
         pass
@@ -577,6 +604,87 @@ async def process_request(connection, request):
 
     return None
 
+async def handle_redis_message(payload):
+    """Store and broadcast a message received from Redis."""
+
+    try:
+        message_id = payload["id"]
+        username = payload["username"]
+        public_key = payload["public_key"]
+        ciphertext = base64.b64decode(payload["ciphertext"])
+        nonce = base64.b64decode(payload["nonce"])
+        signature = base64.b64decode(payload["signature"])
+        timestamp = payload["timestamp"]
+
+        await asyncio.to_thread(
+            store_message,
+            message_id,
+            username,
+            public_key,
+            ciphertext,
+            nonce,
+            signature,
+            timestamp,
+        )
+
+        message = decrypt_message(
+            ciphertext,
+            nonce,
+        )
+
+        valid_signature = verify_signature(
+            public_key,
+            message,
+            signature,
+        )
+
+        if not valid_signature:
+            print(
+                f"{NAME}: rejected invalid "
+                f"message {message_id}"
+            )
+            return
+
+        await broadcast({
+            "type": "chat",
+            "username": username,
+            "content": message,
+            "timestamp": timestamp,
+        })
+
+    except Exception as error:
+        print(
+            f"{NAME}: failed to process Redis "
+            f"message: {repr(error)}"
+        )
+
+def redis_listener(loop):
+    """Listen for messages published by any backend."""
+
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe("chat_messages")
+
+    print(f"{NAME}: subscribed to Redis chat_messages")
+
+    for item in pubsub.listen():
+
+        if item["type"] != "message":
+            continue
+
+        try:
+            payload = json.loads(item["data"])
+
+            asyncio.run_coroutine_threadsafe(
+                handle_redis_message(payload),
+                loop,
+            )
+
+        except Exception as error:
+            print(
+                f"{NAME}: Redis message error: "
+                f"{repr(error)}"
+            )
+
 async def main():
     """Start the WebSocket server."""
 
@@ -588,6 +696,14 @@ async def main():
     )
 
     health_thread.start()
+
+    redis_thread = threading.Thread(
+        target=redis_listener,
+        args=(loop,),
+        daemon=True,
+    )
+
+    redis_thread.start()
 
     async with websockets.serve(
         handle_client,
