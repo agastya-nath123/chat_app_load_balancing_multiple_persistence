@@ -697,6 +697,8 @@ async def main():
 
     health_thread.start()
 
+    loop = asyncio.get_running_loop()
+
     redis_thread = threading.Thread(
         target=redis_listener,
         args=(loop,),
