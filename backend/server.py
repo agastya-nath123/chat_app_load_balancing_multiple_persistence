@@ -635,8 +635,8 @@ class HealthHandler(BaseHTTPRequestHandler):
         response = {
             "status": "ok",
             "backend": NAME,
-            "cpu_percent": cpu_percent,
-            "memory_percent": memory_percent,
+            "cpu_percent": round(cpu_percent, 2),
+            "memory_percent": round(memory_percent, 2),
         }
 
         body = json.dumps(response).encode()
