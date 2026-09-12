@@ -6,7 +6,7 @@ import ssl
 import base64
 import os
 import json
-import sqlite3
+import psycopg2
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone
@@ -47,8 +47,8 @@ if not 0.0 <= args.failure_rate <= 1.0:
 NAME = args.name
 HOST = "0.0.0.0"
 PORT = args.port
-REDIS_HOST = "YOUR_REDIS_IP"
-REDIS_PORT = 6379
+REDIS_HOST = "localhost"
+REDIS_PORT = 4000
 
 redis_client = redis.Redis(
     host=REDIS_HOST,
@@ -56,7 +56,11 @@ redis_client = redis.Redis(
     decode_responses=True,
 )
 
-DB_PATH = Path(__file__).with_name("chat.db")
+DB_HOST = "localhost"
+DB_PORT = 5432
+DB_NAME = "chatdb"
+DB_USER = "chatuser"
+DB_PASSWORD = "agastya"
 KEY_PATH = Path(__file__).with_name("encryption.key")
 
 # Number of most recent messages sent to a user when they join.
@@ -95,90 +99,175 @@ def load_encryption_key():
 ENCRYPTION_KEY = load_encryption_key()
 aes = AESGCM(ENCRYPTION_KEY)
 
+def get_db_connection():
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+    )
+
 def init_db():
-    """Create the database and messages table if they do not exist."""
-    
-    with sqlite3.connect(DB_PATH) as connection:
+    """Create PostgreSQL tables if they do not exist."""
 
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                public_key TEXT NOT NULL
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    public_key TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
 
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                public_key TEXT NOT NULL,
-                ciphertext BLOB NOT NULL,
-                nonce BLOB NOT NULL,
-                signature BLOB NOT NULL,
-                timestamp TEXT NOT NULL
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id UUID PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    public_key TEXT NOT NULL,
+                    ciphertext BYTEA NOT NULL,
+                    nonce BYTEA NOT NULL,
+                    signature BYTEA NOT NULL,
+                    timestamp TIMESTAMPTZ NOT NULL
+                )
+                """
             )
-            """
-        )
 
+        connection.commit()
 
 def store_message(message_id, username, public_key, ciphertext, nonce, signature, timestamp):
-    """Save a chat message and return its timestamp."""
-    #timestamp = datetime.now(timezone.utc).isoformat()
 
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
-            "INSERT OR IGNORE INTO messages (id, username, public_key, ciphertext, nonce, signature, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (message_id, username, public_key, ciphertext, nonce, signature, timestamp),
-        )
+    """Store a message without allowing duplicate IDs."""
 
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
 
+            cursor.execute(
+                """
+                INSERT INTO messages (
+                    id,
+                    username,
+                    public_key,
+                    ciphertext,
+                    nonce,
+                    signature,
+                    timestamp
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (
+                    message_id,
+                    username,
+                    public_key,
+                    psycopg2.Binary(ciphertext),
+                    psycopg2.Binary(nonce),
+                    psycopg2.Binary(signature),
+                    timestamp,
+                ),
+            )
+
+        connection.commit()
 
 def load_history(limit=HISTORY_LIMIT):
-    """Return the most recent messages, oldest first."""
-    with sqlite3.connect(DB_PATH) as connection:
-        rows = connection.execute(
-            """
-            SELECT id, username, public_key, ciphertext, nonce, signature, timestamp
-            FROM messages
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+    """Load the most recent messages."""
+
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    username,
+                    public_key,
+                    ciphertext,
+                    nonce,
+                    signature,
+                    timestamp
+                FROM messages
+                ORDER BY timestamp DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+
+            rows = cursor.fetchall()
 
     return [
-            {"message_id": idd, "username": username, "public_key": public_key, "ciphertext": base64.b64encode(ciphertext).decode(), "nonce": base64.b64encode(nonce).decode(), "signature": base64.b64encode(signature).decode(), "timestamp": timestamp}
-        for idd, username, public_key, ciphertext, nonce, signature, timestamp in reversed(rows)
+        {
+            "username": username,
+            "public_key": public_key,
+            "ciphertext": base64.b64encode(
+                ciphertext
+            ).decode(),
+            "nonce": base64.b64encode(
+                nonce
+            ).decode(),
+            "signature": base64.b64encode(
+                signature
+            ).decode(),
+            "timestamp": timestamp.isoformat(),
+        }
+        for (
+            username,
+            public_key,
+            ciphertext,
+            nonce,
+            signature,
+            timestamp,
+        ) in reversed(rows)
     ]
 
 def save_public_key(username, public_key):
-    """Store a user's public signing key."""
+    """Save or update a user's public key."""
 
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO users
-            (username, public_key)
-            VALUES (?, ?)
-            """,
-            (username, public_key),
-        )
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                INSERT INTO users (
+                    username,
+                    public_key
+                )
+                VALUES (%s, %s)
+                ON CONFLICT (username)
+                DO UPDATE SET
+                    public_key = EXCLUDED.public_key
+                """,
+                (username, public_key),
+            )
+
+        connection.commit()
 
 def load_public_key(username):
-    """Load a user's public signing key."""
+    """Load a user's public key."""
 
-    with sqlite3.connect(DB_PATH) as connection:
-        row = connection.execute(
-            """
-            SELECT public_key
-            FROM users
-            WHERE username = ?
-            """,
-            (username,),
-        ).fetchone()
+    with get_db_connection() as connection:
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT public_key
+                FROM users
+                WHERE username = %s
+                """,
+                (username,),
+            )
+
+            row = cursor.fetchone()
 
     if row is None:
         return None
@@ -567,13 +656,13 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def start_health_server():
     server = HTTPServer(
-        (HOST, PORT - 1000),
+        (HOST, PORT - 4000),
         HealthHandler
     )
 
     print(
         f"Health API running on "
-        f"http://{HOST}:{PORT - 1000}"
+        f"http://{HOST}:{PORT - 4000}"
     )
 
     server.serve_forever()
@@ -605,17 +694,28 @@ async def process_request(connection, request):
     return None
 
 async def handle_redis_message(payload):
-    """Store and broadcast a message received from Redis."""
+    """Process a message received from Redis."""
 
     try:
         message_id = payload["id"]
         username = payload["username"]
         public_key = payload["public_key"]
-        ciphertext = base64.b64decode(payload["ciphertext"])
-        nonce = base64.b64decode(payload["nonce"])
-        signature = base64.b64decode(payload["signature"])
+
+        ciphertext = base64.b64decode(
+            payload["ciphertext"]
+        )
+
+        nonce = base64.b64decode(
+            payload["nonce"]
+        )
+
+        signature = base64.b64decode(
+            payload["signature"]
+        )
+
         timestamp = payload["timestamp"]
 
+        # Save to THIS backend's PostgreSQL database.
         await asyncio.to_thread(
             store_message,
             message_id,
@@ -627,11 +727,14 @@ async def handle_redis_message(payload):
             timestamp,
         )
 
+        # Decrypt so this backend can broadcast
+        # plaintext to its connected clients.
         message = decrypt_message(
             ciphertext,
             nonce,
         )
 
+        # Verify the signature.
         valid_signature = verify_signature(
             public_key,
             message,
@@ -640,22 +743,25 @@ async def handle_redis_message(payload):
 
         if not valid_signature:
             print(
-                f"{NAME}: rejected invalid "
-                f"message {message_id}"
+                f"{NAME}: invalid signature "
+                f"for message {message_id}"
             )
             return
 
-        await broadcast({
-            "type": "chat",
-            "username": username,
-            "content": message,
-            "timestamp": timestamp,
-        })
+        # Send to clients connected to THIS backend.
+        await broadcast(
+            {
+                "type": "chat",
+                "username": username,
+                "content": message,
+                "timestamp": timestamp,
+            }
+        )
 
     except Exception as error:
         print(
-            f"{NAME}: failed to process Redis "
-            f"message: {repr(error)}"
+            f"{NAME}: Redis message processing error: "
+            f"{repr(error)}"
         )
 
 def redis_listener(loop):
@@ -664,7 +770,10 @@ def redis_listener(loop):
     pubsub = redis_client.pubsub()
     pubsub.subscribe("chat_messages")
 
-    print(f"{NAME}: subscribed to Redis chat_messages")
+    print(
+        f"{NAME}: subscribed to Redis "
+        f"channel 'chat_messages'"
+    )
 
     for item in pubsub.listen():
 
@@ -715,7 +824,7 @@ async def main():
         ssl=ssl_context,
     ):
         print(f"WebSocket server running on wss://{HOST}:{PORT} (backend server name: {NAME})")
-        print(f"Health API running on http://{HOST}:{PORT - 1000}")
+        print(f"Health API running on http://{HOST}:{PORT - 4000}")
         print(f"Database: {DB_PATH}")
         print("Waiting for clients...")
 
