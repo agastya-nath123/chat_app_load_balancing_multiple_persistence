@@ -846,7 +846,6 @@ class APIHandler(BaseHTTPRequestHandler):
             print(
                 f"{NAME}: "
                 f"encrypt={encrypt_time * 1000:.2f}ms "
-                f"key_load={key_load_time * 1000:.2f}ms "
                 f"redis={redis_time * 1000:.2f}ms"
             )
 
