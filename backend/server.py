@@ -89,6 +89,12 @@ ssl_context.load_cert_chain(
 public_key_cache = {}
 public_key_cache_lock = threading.Lock()
 public_keys_lock = threading.Lock()
+
+persistence_total = 0
+persistence_success = 0
+persistence_failed = 0
+
+persistence_lock = threading.Lock()
 # ---------------------------------------------------------
 # Encryption key
 # ---------------------------------------------------------
@@ -171,44 +177,56 @@ def init_db():
             )
 
 def store_message(message_id, username, public_key, ciphertext, nonce, signature, timestamp):
+    global persistence_total
+    global persistence_success
+    global persistence_failed
 
     """Store a message without allowing duplicate IDs."""
+    try:
+        with get_db_connection() as connection:
+            with connection.cursor() as cursor:
 
-    with get_db_connection() as connection:
-        with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO messages (
+                        id,
+                        username,
+                        public_key,
+                        ciphertext,
+                        nonce,
+                        signature,
+                        timestamp
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        message_id,
+                        username,
+                        public_key,
+                        psycopg2.Binary(ciphertext),
+                        psycopg2.Binary(nonce),
+                        psycopg2.Binary(signature),
+                        timestamp,
+                    ),
+                )
+        with persistence_lock:
+            persistence_total += 1
+            persistence_success += 1
+    except Exception:
+        with persistence_lock:
+            persistence_total += 1
+            persistence_failed += 1
 
-            cursor.execute(
-                """
-                INSERT INTO messages (
-                    id,
-                    username,
-                    public_key,
-                    ciphertext,
-                    nonce,
-                    signature,
-                    timestamp
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s
-                )
-                ON CONFLICT (id) DO NOTHING
-                """,
-                (
-                    message_id,
-                    username,
-                    public_key,
-                    psycopg2.Binary(ciphertext),
-                    psycopg2.Binary(nonce),
-                    psycopg2.Binary(signature),
-                    timestamp,
-                ),
-            )
+        raise
 
 def load_history(limit=HISTORY_LIMIT):
     """Load the most recent messages."""
@@ -888,12 +906,19 @@ class APIHandler(BaseHTTPRequestHandler):
 
             cpu_percent = get_cgroup_cpu_percent()
             memory_percent = psutil.virtual_memory().percent
+            with persistence_lock:
+                total = persistence_total
+                success = persistence_success
+                failed = persistence_failed
 
             response = {
                 "status": "ok",
                 "backend": NAME,
                 "cpu_percent": round(cpu_percent, 2),
                 "memory_percent": round(memory_percent, 2),
+                "persistence_total": total,
+                "persistence_success": success,
+                "persistence_failed": failed,
             }
 
             self.send_json(200, response)
