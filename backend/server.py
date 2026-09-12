@@ -1003,8 +1003,6 @@ async def main():
         ssl=ssl_context,
     ):
         print(f"WebSocket server running on wss://{HOST}:{PORT} (backend server name: {NAME})")
-        print(f"Health API running on http://{HOST}:{PORT - 4000}")
-        print(f"Health API running on http://{HOST}:{API_PORT}")
         print("Waiting for clients...")
 
         await asyncio.Future()
