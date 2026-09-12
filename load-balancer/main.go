@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"math"
 	"encoding/json"
 	"flag"
@@ -16,6 +18,7 @@ import (
 	"time"
 )
 const consecutiveFailureThreshold = 3
+const maxAttempts = 3
 
 type Backend struct {
 	URL       *url.URL
@@ -156,6 +159,47 @@ func (lb *LoadBalancer) nextBackend() *Backend {
     return best
 }
 
+func (lb *LoadBalancer) nextBackendExcluding(excluded map[*Backend]bool) *Backend {
+    var best *Backend
+    bestScore := math.Inf(1)
+
+    for _, backend := range lb.backends {
+        if !backend.Alive.Load() || excluded[backend] {
+            continue
+        }
+
+        cpu := float64(backend.CPUPercent.Load()) / 100.0
+
+        if cpu >= lb.CPUThreshold {
+            continue
+        }
+
+        score := backendScore(backend)
+
+        if score < bestScore {
+            best = backend
+            bestScore = score
+        }
+    }
+
+    if best == nil {
+        for _, backend := range lb.backends {
+            if !backend.Alive.Load() || excluded[backend] {
+                continue
+            }
+
+            score := backendScore(backend)
+
+            if best == nil || score < bestScore {
+                best = backend
+                bestScore = score
+            }
+        }
+    }
+
+    return best
+}
+
 func (lb *LoadBalancer) statusHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -212,6 +256,7 @@ func (lb *LoadBalancer) ServeHTTP(
     }
 
 	lb.metrics.Total.Add(1)
+	/*
 
 	backend := lb.nextBackend()
 
@@ -291,7 +336,150 @@ func (lb *LoadBalancer) ServeHTTP(
 	)
 
 	proxy.ServeHTTP(w, r)
+	*/
 
+	var bodyBytes []byte
+	if r.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			lb.metrics.Failed.Add(1)
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	start := time.Now()
+	excluded := make(map[*Backend]bool)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		backend := lb.nextBackendExcluding(excluded)
+
+		if backend == nil {
+			lb.metrics.Failed.Add(1)
+			http.Error(
+				w,
+				"no healthy backends",
+				http.StatusServiceUnavailable,
+			)
+			return
+		}
+
+		// Fresh, unread body for this attempt.
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		r.ContentLength = int64(len(bodyBytes))
+
+		backend.InFlight.Add(1)
+		rec := &statusRecorder{ResponseWriter: w}
+
+		succeeded, retryable := lb.proxyOnce(rec, r, backend, start)
+
+		backend.InFlight.Add(-1)
+
+		if succeeded {
+			return
+		}
+
+		if !retryable {
+			// Response headers were already written to the real
+			// client on this attempt (e.g. body copy failed mid-
+			// stream) — retrying now would corrupt the response,
+			// so stop here rather than writing a second one.
+			return
+		}
+
+		excluded[backend] = true
+
+		if attempt == maxAttempts {
+			lb.metrics.Failed.Add(1)
+			http.Error(
+				w,
+				"backend unavailable after retries",
+				http.StatusBadGateway,
+			)
+			return
+		}
+
+		log.Printf(
+			"Retrying %s %s after backend %s failed (attempt %d/%d)",
+			r.Method,
+			r.URL.Path,
+			backend.URL,
+			attempt+1,
+			maxAttempts,
+		)
+	}
+}
+
+func (lb *LoadBalancer) proxyOnce(
+	rec *statusRecorder,
+	r *http.Request,
+	backend *Backend,
+	start time.Time,
+) (succeeded bool, retryable bool) {
+
+	targetURL := backend.APIURL
+
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = transport
+
+	networkErr := false
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if resp.StatusCode == http.StatusSwitchingProtocols || (resp.StatusCode >= 200 && resp.StatusCode < 400) {
+			lb.metrics.Success.Add(1)
+			backend.ConsecFailures.Store(0)
+		} else {
+			lb.metrics.Failed.Add(1)
+		}
+
+		elapsed := time.Since(start)
+		lb.metrics.recordLatency(elapsed)
+
+		return nil
+	}
+
+	proxy.ErrorHandler = func(
+		rw http.ResponseWriter,
+		req *http.Request,
+		err error,
+	) {
+		networkErr = true
+
+		failures := backend.ConsecFailures.Add(1)
+		if failures >= consecutiveFailureThreshold {
+			if backend.Alive.Swap(false) {
+				log.Printf(
+					"Backend marked UNHEALTHY after %d consecutive failures: %s",
+					failures,
+					backend.URL,
+				)
+			}
+		}
+
+		lb.metrics.BackendErrors.Add(1)
+		// Deliberately not writing to rw here: leaving the response
+		// untouched is what makes it safe for the caller to retry.
+	}
+
+	log.Printf(
+		"%s %s -> %s",
+		r.Method,
+		r.URL.Path,
+		targetURL,
+	)
+
+	proxy.ServeHTTP(rec, r)
+
+	if networkErr {
+		if rec.statusCode != 0 {
+			return false, false
+		}
+		return false, true
+	}
+
+	return true, false
 }
 
 //var transport = &http.Transport{

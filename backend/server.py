@@ -756,6 +756,7 @@ def get_cgroup_cpu_percent():
     return min(cpu_percent, 100.0)
 
 class APIHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
 
     def send_json(self, status_code, data):
         response = json.dumps(data).encode("utf-8")
