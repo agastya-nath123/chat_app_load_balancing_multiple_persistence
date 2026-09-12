@@ -2,7 +2,6 @@ package main
 
 import (
 	"math"
-	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"log"
@@ -102,6 +101,8 @@ func (m *Metrics) percentiles() (
 
 	return p50, p95, p99
 }
+
+const maxExpectedInFlight = 50.0
 
 func backendScore(backend *Backend) float64 {
     cpu := float64(backend.CPUPercent.Load()) / 100.0
