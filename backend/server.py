@@ -109,8 +109,8 @@ ENCRYPTION_KEY = load_encryption_key()
 aes = AESGCM(ENCRYPTION_KEY)
 
 db_pool = psycopg2.pool.ThreadedConnectionPool(
-    minconn=5,
-    maxconn=12,
+    minconn=10,
+    maxconn=50,
     host=DB_HOST,
     port=DB_PORT,
     database=DB_NAME,
