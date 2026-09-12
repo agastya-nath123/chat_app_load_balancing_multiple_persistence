@@ -10,7 +10,7 @@ import time
 import json
 import psycopg2
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
 from pathlib import Path
 import argparse
@@ -880,7 +880,7 @@ class APIHandler(BaseHTTPRequestHandler):
         pass
 
 def start_api_server():
-    server = HTTPServer(
+    server = ThreadingHTTPServer(
         (HOST, API_PORT),
         APIHandler
     )
