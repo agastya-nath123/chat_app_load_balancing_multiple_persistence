@@ -84,6 +84,8 @@ ssl_context.load_cert_chain(
     "/home/student/chat-ssl/key.pem",
 )
 
+public_key_cache = {}
+public_key_cache_lock = threading.Lock()
 # ---------------------------------------------------------
 # Encryption key
 # ---------------------------------------------------------
@@ -259,9 +261,14 @@ def save_public_key(username, public_key):
 def load_public_key(username):
     """Load a user's public key."""
 
+    # Check cache first
+    with public_key_cache_lock:
+        if username in public_key_cache:
+            return public_key_cache[username]
+
+    # Not cached, query PostgreSQL
     with get_db_connection() as connection:
         with connection.cursor() as cursor:
-
             cursor.execute(
                 """
                 SELECT public_key
@@ -276,7 +283,13 @@ def load_public_key(username):
     if row is None:
         return None
 
-    return row[0]
+    public_key = row[0]
+
+    # Store in cache
+    with public_key_cache_lock:
+        public_key_cache[username] = public_key
+
+    return public_key
 
 # ---------------------------------------------------------
 # AES-GCM
