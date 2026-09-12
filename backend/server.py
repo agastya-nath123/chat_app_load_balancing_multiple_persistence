@@ -782,6 +782,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 json.dumps(payload)
             )
             redis_time = time.perf_counter() - start
+            print(
+                f"{NAME}: "
+                f"encrypt={encrypt_time * 1000:.2f}ms "
+                f"key_load={key_load_time * 1000:.2f}ms "
+                f"redis={redis_time * 1000:.2f}ms"
+            )
 
             self.send_json(
                 200,
