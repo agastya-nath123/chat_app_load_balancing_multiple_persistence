@@ -6,6 +6,7 @@ import random
 import ssl
 import base64
 import os
+import time
 import json
 import psycopg2
 import threading
@@ -622,6 +623,62 @@ async def handle_client(websocket):
 # ---------------------------------------------------------
 # Basic APIs for load balancing
 # ---------------------------------------------------------
+def get_cgroup_cpu_percent():
+    """
+    Return CPU usage relative to the cgroup CPU quota.
+
+    100% means the entire CPU allocation is being consumed.
+    """
+
+    # Read CPU quota
+    with open("/sys/fs/cgroup/cpu.max", "r") as f:
+        quota, period = f.read().strip().split()
+
+    if quota == "max":
+        # No cgroup CPU limit.
+        return psutil.cpu_percent(interval=0.1)
+
+    quota = int(quota)
+    period = int(period)
+
+    # How many CPUs the cgroup is allowed to use.
+    allocated_cpus = quota / period
+
+    # Read total CPU time used by the entire cgroup.
+    with open("/sys/fs/cgroup/cpu.stat", "r") as f:
+        stats = {}
+
+        for line in f:
+            key, value = line.split()
+            stats[key] = int(value)
+
+    usage_start = stats["usage_usec"]
+    time_start = time.monotonic()
+
+    # Measure over 100 ms.
+    time.sleep(0.1)
+
+    with open("/sys/fs/cgroup/cpu.stat", "r") as f:
+        stats = {}
+
+        for line in f:
+            key, value = line.split()
+            stats[key] = int(value)
+
+    usage_end = stats["usage_usec"]
+    time_end = time.monotonic()
+
+    cpu_time = (usage_end - usage_start) / 1_000_000
+    elapsed = time_end - time_start
+
+    # CPU capacity available during the measurement period.
+    allocated_cpu_time = elapsed * allocated_cpus
+
+    cpu_percent = (
+        cpu_time / allocated_cpu_time
+    ) * 100
+
+    return min(cpu_percent, 100.0)
 
 class APIHandler(BaseHTTPRequestHandler):
 
@@ -744,7 +801,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
         if self.path == "/health":
 
-            cpu_percent = psutil.cpu_percent(interval=0.1)
+            cpu_percent = get_cgroup_cpu_percent()
             memory_percent = psutil.virtual_memory().percent
 
             response = {
@@ -763,10 +820,39 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
 
                 messages = load_history()
+                
+                plaintext_messages = []
+
+                for message in messages:
+                    try:
+                        ciphertext = base64.b64decode(
+                            message["ciphertext"]
+                        )
+
+                        nonce = base64.b64decode(
+                            message["nonce"]
+                        )
+
+                        plaintext = decrypt_message(
+                            ciphertext,
+                            nonce
+                        )
+
+                        plaintext_messages.append({
+                            "username": message["username"],
+                            "message": plaintext,
+                            "timestamp": message["timestamp"],
+                        })
+
+                    except Exception as error:
+                        print(
+                            f"{NAME}: failed to decrypt message: "
+                            f"{repr(error)}"
+                        )
 
                 self.send_json(
                     200,
-                    messages
+                    plaintext_messages
                 )
 
             except Exception as error:
