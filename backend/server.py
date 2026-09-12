@@ -321,6 +321,10 @@ def load_public_key(username):
     # Store in cache
     with public_key_cache_lock:
         public_key_cache[username] = public_key
+        print(
+            f"{NAME}: STORED {username}, "
+            f"cache={list(public_key_cache.keys())}"
+        )
 
     return public_key
 
