@@ -1,4 +1,5 @@
 import asyncio
+import psutil
 from urllib.parse import urlparse, parse_qs
 import uuid
 import random
@@ -623,33 +624,29 @@ async def handle_client(websocket):
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-
-            response = json.dumps({
-                "status": "ok",
-                "backend": NAME
-            })
-
-            self.wfile.write(response.encode())
-
-        elif self.path == "/info":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-
-            response = json.dumps({
-                "backend": NAME,
-                "port": PORT
-            })
-
-            self.wfile.write(response.encode())
-
-        else:
+        if self.path != "/health":
             self.send_response(404)
             self.end_headers()
+            return
+
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory_percent = psutil.virtual_memory().percent
+
+        response = {
+            "status": "ok",
+            "backend": NAME,
+            "cpu_percent": cpu_percent,
+            "memory_percent": memory_percent,
+        }
+
+        body = json.dumps(response).encode()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+
+        self.wfile.write(body)
 
     def log_message(self, format, *args):
         return
