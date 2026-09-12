@@ -962,8 +962,13 @@ class APIHandler(BaseHTTPRequestHandler):
         # filling your terminal with access logs.
         pass
 
+class APIServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    request_queue_size = 128
+    daemon_threads = True
+
 def start_api_server():
-    server = ThreadingHTTPServer(
+    server = APIServer(
         (HOST, API_PORT),
         APIHandler
     )

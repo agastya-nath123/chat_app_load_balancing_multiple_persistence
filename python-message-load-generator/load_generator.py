@@ -9,6 +9,14 @@ import csv
 from datetime import datetime, timezone
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(
+    pool_connections=200,
+    pool_maxsize=200,
+    max_retries=0,
+)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
 
 HEALTH_URLS = {
     "system1": "http://10.1.75.51:3266/health",
@@ -110,7 +118,7 @@ class LoadGenerator:
             start = time.perf_counter()
 
             try:
-                response = requests.post(
+                response = session.post(
                     self.url,
                     json=payload,
                     verify=False,
@@ -154,6 +162,7 @@ class LoadGenerator:
                     self.total += 1
                     self.failed += 1
                     self.latencies.append(elapsed)
+
 
             interval = random.uniform(
                 self.min_interval,
