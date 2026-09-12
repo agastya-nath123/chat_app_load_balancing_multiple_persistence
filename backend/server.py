@@ -692,7 +692,10 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
-        self.wfile.write(response)
+        try:
+            self.wfile.write(response)
+        except BrokenPipeError:
+            pass
 
     def do_OPTIONS(self):
         self.send_response(204)
