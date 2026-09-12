@@ -117,6 +117,7 @@ db_pool = psycopg2.pool.ThreadedConnectionPool(
     user=DB_USER,
     password=DB_PASSWORD,
 )
+db_semaphore = asyncio.Semaphore(10)
 
 @contextmanager
 def get_db_connection(max_retries=5, base_delay=0.05):
@@ -1031,16 +1032,17 @@ async def handle_redis_message(payload):
         source = payload.get("source", "websocket")
 
         # Save to THIS backend's PostgreSQL database.
-        await asyncio.to_thread(
-            store_message,
-            message_id,
-            username,
-            public_key,
-            ciphertext,
-            nonce,
-            signature,
-            timestamp,
-        )
+        async with db_semaphore:
+            await asyncio.to_thread(
+                store_message,
+                message_id,
+                username,
+                public_key,
+                ciphertext,
+                nonce,
+                signature,
+                timestamp,
+            )
 
         # Decrypt so this backend can broadcast
         # plaintext to its connected clients.
