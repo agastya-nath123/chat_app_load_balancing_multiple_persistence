@@ -49,7 +49,7 @@ NAME = args.name
 HOST = "0.0.0.0"
 PORT = args.port
 REDIS_HOST = "10.1.75.51"
-REDIS_PORT = 4000
+REDIS_PORT = 4265
 
 redis_client = redis.Redis(
     host=REDIS_HOST,
