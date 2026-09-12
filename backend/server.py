@@ -818,13 +818,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
             # Get the user's public key if your application
             # requires it.
-            start = time.perf_counter()
-            public_key = load_public_key(client_name)
-            key_load_time = time.perf_counter() - start
-
-
-            if public_key is None:
-                public_key = ""
+            public_key = ""
 
             # Create payload for Redis.
             payload = {
