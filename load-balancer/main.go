@@ -20,6 +20,8 @@ type Backend struct {
 	HealthURL *url.URL
 	Alive     atomic.Bool
 	InFlight  atomic.Int64
+	CPUPercent    atomic.Uint64
+	MemoryPercent atomic.Uint64
 }
 
 type LoadBalancer struct {
@@ -126,6 +128,8 @@ func (lb *LoadBalancer) statusHandler(
 		HealthURL string `json:"health_url"`
 		Alive     bool   `json:"alive"`
 		InFlight  int64  `json:"in_flight"`
+		CPUPercent    float64 `json:"cpu_percent"`
+		MemoryPercent float64 `json:"memory_percent"`
 	}
 
 	statuses := make([]BackendStatus, 0, len(lb.backends))
@@ -136,6 +140,8 @@ func (lb *LoadBalancer) statusHandler(
 			HealthURL: backend.HealthURL.String(),
 			Alive:     backend.Alive.Load(),
 			InFlight:  backend.InFlight.Load(),
+			CPUPercent:    float64(backend.CPUPercent.Load()) / 100,
+			MemoryPercent: float64(backend.MemoryPercent.Load()) / 100,
 		})
 	}
 
@@ -234,6 +240,13 @@ var transport = &http.Transport{
 	},
 }
 
+type HealthResponse struct {
+	Status        string  `json:"status"`
+	Backend       string  `json:"backend"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryPercent float64 `json:"memory_percent"`
+}
+
 func (lb *LoadBalancer) checkBackend(backend *Backend) {
 	client := &http.Client{
 		Timeout: 2 * time.Second,
@@ -254,16 +267,9 @@ func (lb *LoadBalancer) checkBackend(backend *Backend) {
 		return
 	}
 
-	resp.Body.Close()
+	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		if !backend.Alive.Swap(true) {
-			log.Printf(
-				"Backend became HEALTHY: %s",
-				backend.URL,
-			)
-		}
-	} else {
+	if resp.StatusCode != http.StatusOK {
 		if backend.Alive.Swap(false) {
 			log.Printf(
 				"Backend became UNHEALTHY: %s (status %d)",
@@ -271,7 +277,46 @@ func (lb *LoadBalancer) checkBackend(backend *Backend) {
 				resp.StatusCode,
 			)
 		}
+
+		return
 	}
+
+	var health HealthResponse
+
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		if backend.Alive.Swap(false) {
+			log.Printf(
+				"Backend returned invalid health response: %s",
+				backend.URL,
+			)
+		}
+
+		return
+	}
+
+	// Store CPU and memory as hundredths.
+	backend.CPUPercent.Store(
+		uint64(health.CPUPercent * 100),
+	)
+
+	backend.MemoryPercent.Store(
+		uint64(health.MemoryPercent * 100),
+	)
+
+	if !backend.Alive.Swap(true) {
+		log.Printf(
+			"Backend became HEALTHY: %s (CPU %.2f%%)",
+			backend.URL,
+			health.CPUPercent,
+		)
+	}
+
+	log.Printf(
+		"Health: %s | CPU %.2f%% | Memory %.2f%%",
+		backend.URL,
+		health.CPUPercent,
+		health.MemoryPercent,
+	)
 }
 
 func (lb *LoadBalancer) healthLoop() {
@@ -358,7 +403,7 @@ func main() {
 			HealthURL: healthURL,
 		}
 
-		backend.Alive.Store(true)
+		backend.Alive.Store(false)
 
 		backends = append(backends, backend)
 
