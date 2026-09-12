@@ -43,11 +43,11 @@ args = parser.parse_args()
 if not 0.0 <= args.failure_rate <= 1.0:
     parser.error("--failure-rate must be between 0.0 and 1.0")
 
-API_PORT = 2000
+API_PORT = 5000
 NAME = args.name
 HOST = "0.0.0.0"
 PORT = args.port
-REDIS_HOST = "localhost"
+REDIS_HOST = "10.1.75.51"
 REDIS_PORT = 4000
 
 redis_client = redis.Redis(
