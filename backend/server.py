@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import argparse
 import redis
+import time
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -744,11 +745,16 @@ class APIHandler(BaseHTTPRequestHandler):
             )
 
             # Encrypt the message.
+            start = time.perf_counter()
             ciphertext, nonce = encrypt_message(msg)
+            encrypt_time = time.perf_counter() - start
 
             # Get the user's public key if your application
             # requires it.
+            start = time.perf_counter()
             public_key = load_public_key(client_name)
+            key_load_time = time.perf_counter() - start
+
 
             if public_key is None:
                 public_key = ""
@@ -769,11 +775,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 "source": "api"
             }
 
+            start = time.perf_counter()
             # Publish to Redis.
             redis_client.publish(
                 "chat_messages",
                 json.dumps(payload)
             )
+            redis_time = time.perf_counter() - start
 
             self.send_json(
                 200,
