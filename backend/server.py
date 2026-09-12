@@ -825,7 +825,6 @@ async def main():
     ):
         print(f"WebSocket server running on wss://{HOST}:{PORT} (backend server name: {NAME})")
         print(f"Health API running on http://{HOST}:{PORT - 4000}")
-        print(f"Database: {DB_PATH}")
         print("Waiting for clients...")
 
         await asyncio.Future()
