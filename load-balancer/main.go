@@ -26,8 +26,8 @@ type Backend struct {
 
 type LoadBalancer struct {
 	backends []*Backend
-	next     atomic.Uint64
 	metrics  Metrics
+	CPUThreshold float64
 }
 
 type Metrics struct {
@@ -100,23 +100,74 @@ func (m *Metrics) percentiles() (
 }
 
 func (lb *LoadBalancer) nextBackend() *Backend {
-	n := len(lb.backends)
+	var best *Backend
 
-	if n == 0 {
-		return nil
-	}
+	cpuThreshold := lb.CPUThreshold
 
-	for i := 0; i < n; i++ {
-		index := lb.next.Add(1) % uint64(n)
+	// First pass:
+	// Find the healthy backend with the lowest CPU
+	// among those below the threshold.
+	for _, backend := range lb.backends {
+		if !backend.Alive.Load() {
+			continue
+		}
 
-		backend := lb.backends[index]
+		cpu := float64(backend.CPUPercent.Load()) / 100.0
 
-		if backend.Alive.Load() {
-			return backend
+		if cpu >= cpuThreshold {
+			continue
+		}
+
+		if best == nil {
+			best = backend
+			continue
+		}
+
+		bestCPU := float64(best.CPUPercent.Load()) / 100.0
+
+		if cpu < bestCPU {
+			best = backend
+			continue
+		}
+
+		// CPU is equal, use in-flight requests as tie-breaker.
+		if cpu == bestCPU &&
+			backend.InFlight.Load() < best.InFlight.Load() {
+			best = backend
 		}
 	}
 
-	return nil
+	if best != nil {
+		return best
+	}
+
+	// If every healthy backend is above the threshold,
+	// choose the healthy backend with the lowest CPU.
+	for _, backend := range lb.backends {
+		if !backend.Alive.Load() {
+			continue
+		}
+
+		if best == nil {
+			best = backend
+			continue
+		}
+
+		cpu := float64(backend.CPUPercent.Load()) / 100.0
+		bestCPU := float64(best.CPUPercent.Load()) / 100.0
+
+		if cpu < bestCPU {
+			best = backend
+			continue
+		}
+
+		if cpu == bestCPU &&
+			backend.InFlight.Load() < best.InFlight.Load() {
+			best = backend
+		}
+	}
+
+	return best
 }
 
 func (lb *LoadBalancer) statusHandler(
@@ -319,17 +370,22 @@ func (lb *LoadBalancer) checkBackend(backend *Backend) {
 	)
 }
 
+func (lb *LoadBalancer) healthWorker(backend *Backend) {
+    ticker := time.NewTicker(1 * time.Second)
+    defer ticker.Stop()
+
+    for {
+        lb.checkBackend(backend)
+        <-ticker.C
+    }
+}
+
 func (lb *LoadBalancer) healthLoop() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+    for _, backend := range lb.backends {
+        go lb.healthWorker(backend)
+    }
 
-	for {
-		for _, backend := range lb.backends {
-			lb.checkBackend(backend)
-		}
-
-		<-ticker.C
-	}
+    select {}
 }
 
 func (lb *LoadBalancer) metricsHandler(
@@ -415,7 +471,8 @@ func main() {
 	}
 
 	lb := &LoadBalancer{
-		backends: backends,
+		backends:      backends,
+		CPUThreshold: 70.0,
 	}
 
 	_ = lb
