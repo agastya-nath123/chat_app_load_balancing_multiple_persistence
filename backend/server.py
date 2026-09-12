@@ -621,35 +621,6 @@ async def handle_client(websocket):
 # ---------------------------------------------------------
 # Basic APIs for load balancing
 # ---------------------------------------------------------
-class HealthHandler(BaseHTTPRequestHandler):
-
-    def do_GET(self):
-        if self.path != "/health":
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        memory_percent = psutil.virtual_memory().percent
-
-        response = {
-            "status": "ok",
-            "backend": NAME,
-            "cpu_percent": round(cpu_percent, 2),
-            "memory_percent": round(memory_percent, 2),
-        }
-
-        body = json.dumps(response).encode()
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):
-        return
 
 class APIHandler(BaseHTTPRequestHandler):
 
@@ -770,53 +741,56 @@ class APIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
 
-        if self.path != "/feed":
-            self.send_json(
-                404,
-                {"error": "Not found"}
-            )
+        if self.path == "/health":
+
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            memory_percent = psutil.virtual_memory().percent
+
+            response = {
+                "status": "ok",
+                "backend": NAME,
+                "cpu_percent": round(cpu_percent, 2),
+                "memory_percent": round(memory_percent, 2),
+            }
+
+            self.send_json(200, response)
             return
 
-        try:
 
-            messages = load_history()
+        if self.path == "/feed":
 
-            self.send_json(
-                200,
-                messages
-            )
+            try:
 
-        except Exception as error:
+                messages = load_history()
 
-            print(
-                f"{NAME}: /feed error: "
-                f"{repr(error)}"
-            )
+                self.send_json(
+                    200,
+                    messages
+                )
 
-            self.send_json(
-                500,
-                {
-                    "error": "Internal server error"
-                }
-            )
+            except Exception as error:
+
+                print(
+                    f"{NAME}: /feed error: "
+                    f"{repr(error)}"
+                )
+
+                self.send_json(
+                    500,
+                    {
+                        "error": "Internal server error"
+                    }
+                )
+
+        self.send_json(
+            404,
+            {"error": "Not found"}
+        )
 
     def log_message(self, format, *args):
         # Prevent BaseHTTPRequestHandler from
         # filling your terminal with access logs.
         pass
-
-def start_health_server():
-    server = HTTPServer(
-        (HOST, PORT - 4000),
-        HealthHandler
-    )
-
-    print(
-        f"Health API running on "
-        f"http://{HOST}:{PORT - 4000}"
-    )
-
-    server.serve_forever()
 
 def start_api_server():
     server = HTTPServer(
@@ -825,7 +799,7 @@ def start_api_server():
     )
 
     print(
-        f"API server running on "
+        f"API & Health server running on "
         f"http://{HOST}:{API_PORT}"
     )
 
@@ -972,17 +946,11 @@ async def main():
 
     init_db()
 
-    health_thread = threading.Thread(
-        target=start_health_server,
-        daemon=True,
-    )
-
     api_thread = threading.Thread(
         target=start_api_server,
         daemon=True,
     )
 
-    health_thread.start()
     api_thread.start()
 
     loop = asyncio.get_running_loop()
