@@ -740,6 +740,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 ).decode(),
                 "signature": "",
                 "timestamp": timestamp.isoformat(),
+                "source": "api"
             }
 
             # Publish to Redis.
@@ -881,6 +882,8 @@ async def handle_redis_message(payload):
 
         timestamp = payload["timestamp"]
 
+        source = payload.get("source", "websocket")
+
         # Save to THIS backend's PostgreSQL database.
         await asyncio.to_thread(
             store_message,
@@ -901,18 +904,20 @@ async def handle_redis_message(payload):
         )
 
         # Verify the signature.
-        valid_signature = verify_signature(
-            public_key,
-            message,
-            signature,
-        )
+        if source != "api":
 
-        if not valid_signature:
-            print(
-                f"{NAME}: invalid signature "
-                f"for message {message_id}"
+            valid_signature = verify_signature(
+                public_key,
+                message,
+                signature,
             )
-            return
+
+            if not valid_signature:
+                print(
+                    f"{NAME}: invalid signature "
+                    f"for message {message_id}"
+                )
+                return
 
         # Send to clients connected to THIS backend.
         await broadcast(
@@ -922,6 +927,11 @@ async def handle_redis_message(payload):
                 "content": message,
                 "timestamp": timestamp,
             }
+        )
+
+        print(
+            f"{NAME}: broadcast message "
+            f"{message_id} from {username}"
         )
 
     except Exception as error:
