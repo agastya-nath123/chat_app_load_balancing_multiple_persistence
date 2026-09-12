@@ -110,7 +110,7 @@ aes = AESGCM(ENCRYPTION_KEY)
 
 db_pool = psycopg2.pool.ThreadedConnectionPool(
     minconn=5,
-    maxconn=20,
+    maxconn=12,
     host=DB_HOST,
     port=DB_PORT,
     database=DB_NAME,
@@ -120,7 +120,16 @@ db_pool = psycopg2.pool.ThreadedConnectionPool(
 
 @contextmanager
 def get_db_connection():
-    connection = db_pool.getconn()
+    #connection = db_pool.getconn()
+    connection = None
+    for attempt in range(max_retries):
+        try:
+            connection = db_pool.getconn()
+            break
+        except psycopg2.pool.PoolError:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(base_delay * (2 ** attempt))  # exponential backoff
 
     try:
         yield connection
