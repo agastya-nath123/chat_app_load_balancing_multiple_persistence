@@ -24,7 +24,8 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--port", type=int, default=5000)
+parser.add_argument("--port", type=int, default=6000)
+parser.add_argument("--api-port", type=int, default=5000)
 parser.add_argument("--name", default="backend")
 parser.add_argument(
     "--failure-rate",
@@ -44,7 +45,7 @@ args = parser.parse_args()
 if not 0.0 <= args.failure_rate <= 1.0:
     parser.error("--failure-rate must be between 0.0 and 1.0")
 
-API_PORT = 5000
+API_PORT = args.api-port
 NAME = args.name
 HOST = "0.0.0.0"
 PORT = args.port
