@@ -119,7 +119,7 @@ db_pool = psycopg2.pool.ThreadedConnectionPool(
 )
 
 @contextmanager
-def get_db_connection():
+def get_db_connection(max_retries=5, base_delay=0.05):
     #connection = db_pool.getconn()
     connection = None
     for attempt in range(max_retries):
