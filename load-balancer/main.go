@@ -18,7 +18,7 @@ import (
 
 type Backend struct {
 	URL       *url.URL
-	HealthURL *url.URL
+	APIURL    *url.URL
 	Alive     atomic.Bool
 	InFlight  atomic.Int64
 	CPUPercent    atomic.Uint64
@@ -158,7 +158,7 @@ func (lb *LoadBalancer) statusHandler(
 ) {
 	type BackendStatus struct {
 		URL       string `json:"url"`
-		HealthURL string `json:"health_url"`
+		APIURL string `json:"api_url"`
 		Alive     bool   `json:"alive"`
 		InFlight  int64  `json:"in_flight"`
 		CPUPercent    float64 `json:"cpu_percent"`
@@ -170,7 +170,7 @@ func (lb *LoadBalancer) statusHandler(
 	for _, backend := range lb.backends {
 		statuses = append(statuses, BackendStatus{
 			URL:       backend.URL.String(),
-			HealthURL: backend.HealthURL.String(),
+			APIURL: backend.APIURL.String(),
 			Alive:     backend.Alive.Load(),
 			InFlight:  backend.InFlight.Load(),
 			CPUPercent:    float64(backend.CPUPercent.Load()) / 100,
@@ -226,9 +226,15 @@ func (lb *LoadBalancer) ServeHTTP(
 
 	start := time.Now()
 
-	proxy := httputil.NewSingleHostReverseProxy(
-		backend.URL,
-	)
+	var targetURL *url.URL
+
+	if r.URL.Path == "/message" || r.URL.Path == "/feed" {
+		targetURL = backend.APIURL
+	} else {
+		targetURL = backend.URL
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
 	proxy.Transport = transport
 
@@ -266,7 +272,7 @@ func (lb *LoadBalancer) ServeHTTP(
 		"%s %s -> %s",
 		r.Method,
 		r.URL.Path,
-		backend.URL,
+		targetURL,
 	)
 
 	proxy.ServeHTTP(w, r)
@@ -292,7 +298,7 @@ func (lb *LoadBalancer) checkBackend(backend *Backend) {
 	}
 
 	resp, err := client.Get(
-		backend.HealthURL.String() + "/health",
+		backend.APIURL.String() + "/health",
 	)
 
 	if err != nil {
@@ -433,10 +439,10 @@ func main() {
 			)
 		}
 
-		healthURL, err := url.Parse(strings.TrimSpace(urls[1]))
+		apiURL, err := url.Parse(strings.TrimSpace(urls[1]))
 		if err != nil {
 			log.Fatalf(
-				"invalid health URL %q: %v",
+				"invalid API URL %q: %v",
 				urls[1],
 				err,
 			)
@@ -444,7 +450,7 @@ func main() {
 
 		backend := &Backend{
 			URL:       chatURL,
-			HealthURL: healthURL,
+			APIURL: apiURL,
 		}
 
 		backend.Alive.Store(false)
@@ -454,7 +460,7 @@ func main() {
 		log.Printf(
 			"Backend: %s | Health: %s",
 			chatURL,
-			healthURL,
+			apiURL,
 		)
 	}
 
