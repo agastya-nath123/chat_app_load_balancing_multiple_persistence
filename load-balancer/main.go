@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 )
+const consecutiveFailureThreshold = 3
 
 type Backend struct {
 	URL       *url.URL
@@ -23,6 +25,7 @@ type Backend struct {
 	InFlight  atomic.Int64
 	CPUPercent    atomic.Uint64
 	MemoryPercent atomic.Uint64
+	ConsecFailures atomic.Int32
 }
 
 type LoadBalancer struct {
@@ -103,7 +106,7 @@ func (m *Metrics) percentiles() (
 func backendScore(backend *Backend) float64 {
     cpu := float64(backend.CPUPercent.Load()) / 100.0
     memory := float64(backend.MemoryPercent.Load()) / 100.0
-    inFlight := float64(backend.InFlight.Load())
+	inFlight := math.Min(float64(backend.InFlight.Load())/maxExpectedInFlight, 1.0)
 
     return cpu*0.7 + memory*0.2 + inFlight*0.1
 }
@@ -241,6 +244,7 @@ func (lb *LoadBalancer) ServeHTTP(
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if resp.StatusCode == http.StatusSwitchingProtocols || (resp.StatusCode >= 200 && resp.StatusCode < 400) {
 			lb.metrics.Success.Add(1)
+			backend.ConsecFailures.Store(0)
 		} else {
 			lb.metrics.Failed.Add(1)
 		}
@@ -256,7 +260,17 @@ func (lb *LoadBalancer) ServeHTTP(
 		req *http.Request,
 		err error,
 	) {
-		backend.Alive.Store(false)
+		//backend.Alive.Store(false)
+		failures := backend.ConsecFailures.Add(1)
+		if failures >= consecutiveFailureThreshold {
+			if backend.Alive.Swap(false) {
+				log.Printf(
+					"Backend marked UNHEALTHY after %d consecutive failures: %s",
+					failures,
+					backend.URL,
+				)
+			}
+		}
 
 		lb.metrics.BackendErrors.Add(1)
 		lb.metrics.Failed.Add(1)
@@ -279,13 +293,23 @@ func (lb *LoadBalancer) ServeHTTP(
 
 }
 
+//var transport = &http.Transport{
+//	TLSClientConfig: &tls.Config{
+//		InsecureSkipVerify: true,
+//	},
+//	MaxIdleConns:        2000,
+//	MaxIdleConnsPerHost: 1000,
+//	IdleConnTimeout:     90 * time.Second,
+//}
+
 var transport = &http.Transport{
-	TLSClientConfig: &tls.Config{
-		InsecureSkipVerify: true,
-	},
-	MaxIdleConns:        2000,
-	MaxIdleConnsPerHost: 1000,
-	IdleConnTimeout:     90 * time.Second,
+	MaxIdleConns:          2000,
+	MaxIdleConnsPerHost:   1000,
+	IdleConnTimeout:       90 * time.Second,
+	ResponseHeaderTimeout: 5 * time.Second,
+	DialContext: (&net.Dialer{
+		Timeout: 2 * time.Second,
+	}).DialContext,
 }
 
 type HealthResponse struct {
@@ -351,6 +375,8 @@ func (lb *LoadBalancer) checkBackend(backend *Backend) {
 		uint64(health.MemoryPercent * 100),
 	)
 
+	backend.ConsecFailures.Store(0)
+
 	if !backend.Alive.Swap(true) {
 		log.Printf(
 			"Backend became HEALTHY: %s (CPU %.2f%%)",
@@ -413,6 +439,12 @@ func main() {
 		"Comma-separated backend URLs",
 	)
 
+	threshold := flag.Float64(
+		"threshold",
+		0.70,
+		"CPU threshold (0.0-1.0) for switching backends",
+	)
+
 	flag.Parse()
 
 	if *rawBackends == "" {
@@ -469,8 +501,9 @@ func main() {
 
 	lb := &LoadBalancer{
 		backends:      backends,
-		CPUThreshold: 0.70,
+		CPUThreshold: *threshold,
 	}
+	log.Printf("CPU threshold: %.2f", *threshold)
 
 	_ = lb
 	go lb.healthLoop()
