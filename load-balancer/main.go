@@ -283,6 +283,9 @@ var transport = &http.Transport{
 	TLSClientConfig: &tls.Config{
 		InsecureSkipVerify: true,
 	},
+	MaxIdleConns:        2000,
+	MaxIdleConnsPerHost: 1000,
+	IdleConnTimeout:     90 * time.Second,
 }
 
 type HealthResponse struct {
