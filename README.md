@@ -1,8 +1,8 @@
 # Real-Time Group Chat with Dynamic Load Balancing and Persistent Storage
 
-**Author:** Agastya Nath (Roll No. 12340140)
-**Load Balancer URL:** http://10.1.75.51:7265
-**API Endpoints:** `/message`, `/feed`
+**Author:** Agastya Nath (Roll No. 12340140)  
+**Load Balancer URL:** http://10.1.75.51:7265  
+**API Endpoints:** `/message`, `/feed`  
 
 A distributed, real-time group chat application built for Lab 6 (Dynamic Load Balancing and Persistent Chat). Clients communicate over WebSockets with any of six independent backend processes; a Go load balancer distributes HTTP traffic across the backends based on live CPU/memory/in-flight load, Redis fans messages out between backends, and PostgreSQL persists every message with duplicate-safe writes.
 
@@ -202,6 +202,3 @@ Diagnosed during load testing and worth documenting for anyone extending this pr
 - **CPU is the dominant bottleneck** — memory remained stable (~21–22%) across all tested loads; CPU saturation on backend processes is what limits throughput at scale.
 - **HTTP keep-alive matters** — the backend HTTP handler uses `protocol_version = "HTTP/1.1"` so the load balancer's connection pool can reuse TCP connections instead of paying a full handshake per request.
 
-## AI Citation
-
-AI (ChatGPT) was used in gathering material and formulating/creating the documentation for the accompanying report, in accordance with the code and repository details and requirements for execution of the code.
