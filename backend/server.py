@@ -43,7 +43,7 @@ args = parser.parse_args()
 if not 0.0 <= args.failure_rate <= 1.0:
     parser.error("--failure-rate must be between 0.0 and 1.0")
 
-
+API_PORT = 2000
 NAME = args.name
 HOST = "0.0.0.0"
 PORT = args.port
@@ -654,6 +654,159 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+class APIHandler(BaseHTTPRequestHandler):
+
+    def send_json(self, status_code, data):
+        response = json.dumps(data).encode("utf-8")
+
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        self.wfile.write(response)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS"
+        )
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type"
+        )
+        self.end_headers()
+
+    def do_POST(self):
+
+        if self.path != "/message":
+            self.send_json(
+                404,
+                {"error": "Not found"}
+            )
+            return
+
+        try:
+            content_length = int(
+                self.headers.get("Content-Length", 0)
+            )
+
+            body = self.rfile.read(content_length)
+
+            data = json.loads(body)
+
+            client_name = data.get("client-name")
+            msg = data.get("msg")
+
+            if not client_name or not msg:
+                self.send_json(
+                    400,
+                    {
+                        "error":
+                        "client-name and msg are required"
+                    }
+                )
+                return
+
+            message_id = str(uuid.uuid4())
+
+            timestamp = datetime.now(
+                timezone.utc
+            )
+
+            # Encrypt the message.
+            ciphertext, nonce = encrypt_message(msg)
+
+            # Get the user's public key if your application
+            # requires it.
+            public_key = load_public_key(client_name)
+
+            if public_key is None:
+                public_key = ""
+
+            # Create payload for Redis.
+            payload = {
+                "id": message_id,
+                "username": client_name,
+                "public_key": public_key,
+                "ciphertext": base64.b64encode(
+                    ciphertext
+                ).decode(),
+                "nonce": base64.b64encode(
+                    nonce
+                ).decode(),
+                "signature": "",
+                "timestamp": timestamp.isoformat(),
+            }
+
+            # Publish to Redis.
+            redis_client.publish(
+                "chat_messages",
+                json.dumps(payload)
+            )
+
+            self.send_json(
+                200,
+                {
+                    "status": "submitted",
+                    "id": message_id
+                }
+            )
+
+        except Exception as error:
+
+            print(
+                f"{NAME}: /message error: "
+                f"{repr(error)}"
+            )
+
+            self.send_json(
+                500,
+                {
+                    "error": "Internal server error"
+                }
+            )
+
+    def do_GET(self):
+
+        if self.path != "/feed":
+            self.send_json(
+                404,
+                {"error": "Not found"}
+            )
+            return
+
+        try:
+
+            messages = load_history()
+
+            self.send_json(
+                200,
+                messages
+            )
+
+        except Exception as error:
+
+            print(
+                f"{NAME}: /feed error: "
+                f"{repr(error)}"
+            )
+
+            self.send_json(
+                500,
+                {
+                    "error": "Internal server error"
+                }
+            )
+
+    def log_message(self, format, *args):
+        # Prevent BaseHTTPRequestHandler from
+        # filling your terminal with access logs.
+        pass
+
 def start_health_server():
     server = HTTPServer(
         (HOST, PORT - 4000),
@@ -663,6 +816,19 @@ def start_health_server():
     print(
         f"Health API running on "
         f"http://{HOST}:{PORT - 4000}"
+    )
+
+    server.serve_forever()
+
+def start_api_server():
+    server = HTTPServer(
+        (HOST, API_PORT),
+        APIHandler
+    )
+
+    print(
+        f"API server running on "
+        f"http://{HOST}:{API_PORT}"
     )
 
     server.serve_forever()
@@ -804,7 +970,13 @@ async def main():
         daemon=True,
     )
 
+    api_thread = threading.Thread(
+        target=start_api_server,
+        daemon=True,
+    )
+
     health_thread.start()
+    api_thread.start()
 
     loop = asyncio.get_running_loop()
 
@@ -825,6 +997,7 @@ async def main():
     ):
         print(f"WebSocket server running on wss://{HOST}:{PORT} (backend server name: {NAME})")
         print(f"Health API running on http://{HOST}:{PORT - 4000}")
+        print(f"Health API running on http://{HOST}:{API_PORT}")
         print("Waiting for clients...")
 
         await asyncio.Future()
