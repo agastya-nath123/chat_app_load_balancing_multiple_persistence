@@ -264,16 +264,16 @@ def load_public_key(username):
 
     # Check cache first
     with public_key_cache_lock:
-        if username in public_key_cache:
-            elapsed = time.perf_counter() - start
-            print(
-                f"{NAME}: CACHE HIT {username} "
-                f"({elapsed * 1000:.2f}ms)"
-            )
-            return public_key_cache[username]
+        cached = public_key_cache.get(username)
 
-    # Not cached, query PostgreSQL
-    cache_check_time = time.perf_counter()
+    if cached is not None:
+        elapsed = time.perf_counter() - start
+        print(
+            f"{NAME}: CACHE HIT {username} "
+            f"({elapsed * 1000:.2f}ms)"
+        )
+        return cached
+
     print(f"{NAME}: CACHE MISS {username}")
 
     connection_start = time.perf_counter()
