@@ -1,488 +1,207 @@
-# Real-Time Group Chat Application with Load Balancing in Go
+# Real-Time Group Chat with Dynamic Load Balancing and Persistent Storage
 
-A real-time group chat application that allows multiple users to communicate simultaneously through a common chat room using WebSockets.
+**Author:** Agastya Nath (Roll No. 12340140)
+**Load Balancer URL:** http://10.1.75.51:7265
+**API Endpoints:** `/message`, `/feed`
 
-The application uses client-side cryptographic keys for message authentication, AES-GCM for message confidentiality and integrity, HTTPS/WSS for secure communication, and a Go-based load balancer to distribute WebSocket connections across multiple Python backend servers.
-
-## Creator:
-
-* Agastya Nath - 12340140
-
-## Features
-
-* Multiple users can join the same chat room.
-* Each user chooses a unique username.
-* Usernames are case-insensitive and must be unique.
-* Usernames must be non-empty and no longer than 20 characters.
-* Messages are delivered to all connected users in real time.
-* Users are notified when another user joins or leaves the chat.
-* Chat messages are encrypted using AES-GCM before being stored in the database.
-* Each message is digitally signed using the sender's RSA private key.
-* The server verifies message signatures before accepting messages.
-* The public key used to sign each message is stored alongside that message.
-* Historical messages are decrypted and signature-verified before being displayed.
-* Tampering with stored ciphertext causes AES-GCM integrity verification to fail.
-* Invalid or corrupted historical messages are rejected and not displayed.
-* Chat history is stored persistently in SQLite.
-* A new user receives the stored chat history when joining the room.
-* HTTPS is used for the frontend.
-* WSS (WebSocket Secure) is used for communication between the frontend and backend.
-* Multiple Python WebSocket backend instances can run simultaneously.
-* A Go load balancer distributes incoming WebSocket connections across backend instances.
-* Backend selection uses round-robin load balancing.
-* The load balancer performs health checks on backend servers.
-* Unhealthy backend servers are removed from the available routing pool.
-* The load balancer provides metrics for monitoring backend traffic and health.
-* WebSocket connections are proxied through the Go load balancer.
-* The frontend connects to the load balancer rather than directly to an individual backend server.
+A distributed, real-time group chat application built for Lab 6 (Dynamic Load Balancing and Persistent Chat). Clients communicate over WebSockets with any of six independent backend processes; a Go load balancer distributes HTTP traffic across the backends based on live CPU/memory/in-flight load, Redis fans messages out between backends, and PostgreSQL persists every message with duplicate-safe writes.
 
 ## Architecture
 
-The application consists of:
-
-* **Backend:** Python WebSocket server using the `websockets` library.
-* **Frontend:** React application built with Vite.
-* **Load Balancer:** Go server responsible for distributing WebSocket connections across backend servers.
-* **Database:** SQLite database used to persist encrypted messages and their associated metadata.
-* **Communication:** WebSockets provide persistent, bidirectional communication between frontend clients and the backend.
-* **Transport Security:** HTTPS is used for the frontend and WSS is used for the WebSocket connection.
-* **Cryptography:** AES-GCM provides message confidentiality and integrity, while RSA-PSS signatures provide message authentication.
-* **Load Balancing:** The Go load balancer uses round-robin routing and backend health checks.
-
-The updated architecture allows several Python backend instances to operate behind a single publicly accessible endpoint.
-
-```text
-
-
-                                                                 HTTPS
-                                                      ┌────────────────────────┐
-                                                      │                        │
-                                                   User 1                   User 2
-                                                   User 3                   User 4
-                                                      │                        │
-                                                      └──────────┬─────────────┘
-                                                                 │
-                                                                WSS
-                                                                 │
-                                                                 ▼
-                                                      ┌──────────────────────┐
-                                                      │    Go Load Balancer  │
-                                                      │                      │
-                                                      │  • Round Robin       │
-                                                      │  • Health Checks     │
-                                                      │  • WebSocket Proxy   │
-                                                      │  • Metrics           │
-                                                      └──────────┬───────────┘
-                                                                 │
-                              ┌───────────────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────┐
-                              │                                                                           │                                                                       │
-                              ▼                                                                           ▼                                                                       ▼ 
-                    ┌───────────────────┐                                                       ┌───────────────────┐                                                 ┌───────────────────┐    
-                    │   Backend Server  │                                                       │   Backend Server  │                                                 │   Backend Server  │
-                    │                   │                                                       │                   │                                                 │                   │
-                    │ Python WebSocket  │                                                       │ Python WebSocket  │                                                 │ Python WebSocket  │
-                    │     Server        │                                                       │     Server        │                                                 │     Server        │
-                    └─────────┬─────────┘                                                       └─────────┬─────────┘                                                 └─────────┬─────────┘
-                              │                                                                           │                                                                     │
-                     ┌────────┴─────────┐                                                        ┌────────┴─────────┐                                                  ┌────────┴─────────┐
-                     │                  │                                                        │                  │                                                  │                  │
-                     ▼                  ▼                                                        ▼                  ▼                                                  ▼                  ▼
-              Message Processing     SQLite DB                                            Message Processing     SQLite DB                                      Message Processing     SQLite DB
-                     │                                                                           │                                                                     │
-            ┌────────┴────────┐                                                         ┌────────┴────────┐                                                   ┌────────┴────────┐
-            │                 │                                                         │                 │                                                   │                 │
-            ▼                 ▼                                                         ▼                 ▼                                                   ▼                 ▼
-       RSA-PSS Verify     AES-GCM                                                  RSA-PSS Verify     AES-GCM                                            RSA-PSS Verify     AES-GCM
-                          Encrypt/                                                                    Encrypt/                                                              Encrypt/
-                          Decrypt                                                                     Decrypt                                                               Decrypt
-                 │            │            │                                                 │            │            │                                           │            │            │
-                 └────────────┼────────────┘                                                 └────────────┼────────────┘                                           └────────────┼────────────┘
-                              │                                                                           │                                                                     │
-                              ▼                                                                           ▼                                                                     ▼
-                         SQLite DB                                                                   SQLite DB                                                             SQLite DB
-
 ```
-## Go Load Balancer
-
-The Go load balancer was added to allow the application to support multiple backend instances rather than relying on a single WebSocket server.
-
-Its responsibilities include:
-
-* Accepting incoming WebSocket connections.
-* Selecting a backend using round-robin scheduling.
-* Forwarding WebSocket traffic to the selected backend.
-* Maintaining a list of available backend servers.
-* Performing backend health checks.
-* Removing unhealthy backends from the routing pool.
-* Allowing recovered backends to become available again.
-* Collecting and exposing load-balancing metrics.
-* Acting as the single endpoint used by the frontend.
-
-The load balancer is implemented separately from the Python messaging server. This allows the existing Python chat implementation to be replicated across multiple machines without moving the chat logic into Go.
-
-## Backend Health Checks
-
-Each Python backend exposes a lightweight health endpoint on a separate port.
-
-The health endpoint returns a JSON response indicating whether the backend is available.
-
-Conceptually:
-```
-Go Load Balancer
-       │
-       ├── Health Check ──► Backend 1
-       │
-       ├── Health Check ──► Backend 2
-       │
-       └── Health Check ──► Backend 3
-```
-If a backend fails its health check, the load balancer stops assigning new connections to it.
-
-This allows the system to continue accepting connections through the remaining healthy backend instances.
-
-## WebSocket Load Balancing
-
-WebSocket connections are persistent, so load balancing occurs when a client establishes a new WebSocket connection.
-```
-Client 1 ──► Go LB ──► Backend 1
-Client 2 ──► Go LB ──► Backend 2
-Client 3 ──► Go LB ──► Backend 3
-Client 4 ──► Go LB ──► Backend 1
-```
-The load balancer uses round-robin selection to distribute new connections.
-
-Once a WebSocket connection has been established, the connection remains associated with the selected backend for the lifetime of that connection.
-
-## Backend Server
-
-The messaging backend remains implemented in Python using the websockets library.
-
-Multiple instances of the same backend server can be started with different ports and server names.
-
-For example:
-
-Backend 1
-```code
-python server.py --port <port> --name backend-1
+                    +----------------------+
+                    |    Load Generator    |
+                    |   (multiple users)   |
+                    +----------+-----------+
+                               |
+                               v
+                    +----------------------+
+                    |   Load Balancer (Go) |
+                    |  :7265 (public port)  |
+                    +----------+-----------+
+                               |
+        +---------+---------+-----+---------+---------+
+        |         |         |     |         |         |
+        v         v         v     v         v         v
+    Backend1  Backend2  Backend3 ... Backend5   Backend6
+        |         |         |     |         |         |
+        +---------+---------+-----+---------+---------+
+                               |
+                        +------+------+
+                        |    Redis    |  (pub/sub message fan-out)
+                        +------+------+
+                               |
+                        +------+------+
+                        | PostgreSQL  |  (persistent storage)
+                        +-------------+
 ```
 
-Backend 2
-```code
-python server.py --port <port> --name backend-2
+### Components
+
+- **Load Balancer** (`main.go`) — Go reverse proxy exposing `/message` and `/feed` on a single public port. Selects backends dynamically using live CPU/memory/in-flight metrics, retries transient backend failures on a different backend, and marks backends unhealthy after consecutive failures.
+- **Backend** (`server.py`) — Python process handling both a WebSocket chat endpoint and an HTTP API (`/message`, `/feed`, `/health`). Each backend independently verifies message signatures, encrypts message content, publishes to Redis, and persists to PostgreSQL.
+- **Redis** — Pub/sub channel (`chat_messages`) so a user connected to Backend 1 still receives messages sent via Backend 5.
+- **PostgreSQL** — Durable storage for users' public keys and messages, accessed through a pooled connection (`ThreadedConnectionPool`, 10–50 connections).
+- **Load Generator** (`load_generator.py`) — Custom Python load-testing tool supporting variable user counts, message lengths, and send intervals, with per-backend CPU/memory/persistence monitoring.
+
+## Backend Details
+
+### Message flow (`POST /message`)
+
+1. Receive `client-name` and `msg` from the request.
+2. Validate the payload and look up the sender's public key (in-memory cache, falling back to PostgreSQL on a cache miss).
+3. Verify the message signature.
+4. Encrypt the message content (AES-256-GCM).
+5. Publish the encrypted message to the Redis `chat_messages` channel.
+6. Persist the message to PostgreSQL, tracking total/success/failed persistence counts.
+7. Broadcast the message to connected WebSocket clients.
+
+Each message is assigned a UUID (`uuid.uuid4()`) as its unique ID. The `messages` table uses this UUID as its primary key with `ON CONFLICT (id) DO NOTHING`, so a message retried or resubmitted with the same ID (due to client retries, reconnects, or load-balancer failover) is inserted at most once.
+
+```sql
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID PRIMARY KEY,
+    username TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    ciphertext BYTEA NOT NULL,
+    nonce BYTEA NOT NULL,
+    signature BYTEA NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL
+)
 ```
 
-Backend 3
-```code
-python server.py --port <port> --name backend-3
+### Public-key caching
+
+A naive implementation would query PostgreSQL on every message to fetch the sender's public key. Instead, keys are cached in memory (`public_key_cache`) after first lookup, protected by a lock (`public_key_cache_lock`) since `/message` requests are handled concurrently. Locks are held only for the cache read/write itself — never across a database or Redis call — to avoid serializing unrelated requests.
+
+### Health endpoint
+
+Each backend exposes `/health`, reporting CPU%, memory%, and cumulative persistence counters (`persistence_total`, `persistence_success`, `persistence_failed`). The load balancer polls this every second per backend to drive routing decisions and failure detection.
+
+## Load Balancer Details
+
+### Dynamic backend selection
+
+Rather than round-robin, each request is routed to the backend with the lowest weighted load score:
+
+```
+score = 0.7 * cpu_percent + 0.2 * memory_percent + 0.1 * normalized_in_flight
 ```
 
-Each backend maintains its own active WebSocket connections while the Go load balancer distributes new clients between the available instances.
+Backends at or above the configured CPU threshold are avoided unless every alive backend is over threshold, in which case the least-loaded backend is used anyway rather than rejecting the request outright.
 
-The backend also exposes a health endpoint on a separate port based on its configured WebSocket port.
+### Health detection
 
-Failure can be simulated in two ways:
-* Manual: Here, the query string
-  ```code
-  /?fail=true
-  ```
-  will create manual failures.
-* Automatic: Here, failures can be simulated with a certain probability through this additional argument:
-  ```code
-  python server.py --port <port> --name backend-3 --failure-rate 0.01
-  ```
-  Here failure will be generated at probability of 0.01.
-* Delay: Here, you can simulate delays and latencies by manually making the server wait for a prespecified period of time at the beginning before it starts up, through this additional argument:
-  ```code
-  python server.py --port <port> --name backend-3 --delay-ms 0.2
-  ```
-  Here, the server waits for 2 milliseconds before starting up.
-## Cryptographic Architecture
+A background goroutine per backend polls `GET <api_url>/health` every second. A backend is marked unhealthy after **3 consecutive** failed health checks or proxy errors, and marked healthy again once a health check succeeds — preventing a single transient blip from pulling a backend out of rotation while still reacting to sustained outages.
 
-Each client generates an RSA key pair:
-```text
-Client
-├── Private Key
-│     └── Used to sign messages
-│
-└── Public Key
-      └── Sent to the server
-```
-The private key remains on the client and is never sent to the server.
+### Retry-on-failure
 
-When a user sends a message:
+If a proxy attempt to a backend fails at the network level (dial failure, timeout, connection reset) before any response bytes have reached the client, the load balancer automatically retries the request against a different healthy backend (up to `maxAttempts`) rather than immediately returning an error. The request body is buffered once per incoming request so it can be safely replayed across attempts. If a response has already begun streaming to the client, the load balancer will not retry (to avoid sending a corrupted second response) — it simply reports the failure.
 
-* The client signs the message using its RSA private key.
-* The message and signature are sent to the backend over the WebSocket.
-* The backend verifies the signature using the sender's public key.
-* If the signature is invalid, the message is rejected.
-* If the signature is valid, the message is encrypted using AES-GCM.
-* The ciphertext, nonce, signature, sender username, public key, and timestamp are stored in SQLite.
-* The message is broadcast to all currently connected users.
+Genuine application-level errors returned by a backend (e.g. HTTP 500) are passed through to the client as-is and are **not** retried, since retrying an application error typically reproduces the same failure and does not represent a transport-layer problem.
 
-Conceptually:
-```text
-Plaintext
-    │
-    ├──────────────► RSA-PSS Signature
-    │
-    ▼
-AES-GCM Encryption
-    │
-    ▼
-Ciphertext + Nonce + Signature + Public Key
-    │
-    ▼
-SQLite Database
-Message Authentication
+### Endpoints
 
-RSA-PSS is used to digitally sign messages.
+| Endpoint      | Method | Description                                                          |
+|---------------|--------|------------------------------------------------------------------------|
+| `/message`    | POST   | Submit a chat message (`client-name`, `msg`) — routed to a backend |
+| `/feed`       | GET    | Retrieve all persisted messages                                     |
+| `/lb/health`  | GET    | Load balancer's own liveness check                                  |
+| `/lb/status`  | GET    | Per-backend alive/CPU/memory/in-flight status                       |
+| `/lb/metrics` | GET    | Aggregate request totals, success/fail counts, and latency percentiles (p50/p95/p99) |
 
-The server verifies the signature before accepting a message:
+## Running It
 
-Message + Signature
-        │
-        ▼
-Server's copy of sender's public key
-        │
-        ▼
-RSA-PSS Verification
-        │
-   ┌────┴────┐
-   │         │
- Valid     Invalid
-   │         │
-   ▼         ▼
-Accept     Reject
-```
-The public key associated with each message is stored in the database. This allows historical messages to be verified even if the user reconnects later and generates a new key pair.
+### 1. Start the backends
 
-## Message Encryption and Tamper Detection
-
-Messages stored in SQLite are encrypted using AES-GCM.
-
-The database stores:
-
-* Username
-* Public key
-* Ciphertext
-* Nonce
-* Digital signature
-* Timestamp
-
-AES-GCM provides both confidentiality and integrity.
-
-If an attacker modifies the ciphertext stored in the database, the AES-GCM authentication check fails during decryption. The server then rejects the message rather than displaying corrupted or tampered content.
-
-```text
-Stored Ciphertext
-       │
-       ▼
-   AES-GCM
-   Decryption
-       │
-       ├── Valid authentication tag
-       │          │
-       │          ▼
-       │       Message
-       │
-       └── Invalid authentication tag
-                  │
-                  ▼
-             Reject message
-```
-This allows tampering with the database to be demonstrated by modifying a stored ciphertext and reconnecting to the chat. The server detects the modification and reports an integrity/decryption failure.
-
-## How It Works
-# User Registration
-* A client establishes a secure WebSocket connection to the backend.
-* The client sends its username as the first message.
-* The server validates the username.
-* The server checks that the username is unique, ignoring case.
-* The client generates its cryptographic key pair.
-* The public key is associated with the user on the server.
-  
-# Joining the Chat
-
-Once the user is registered:
-
-* The server retrieves stored messages from SQLite.
-* Each historical message is decoded and decrypted.
-* Its digital signature is verified using the public key stored with that message.
-* Valid messages are sent to the newly connected client.
-* Corrupted or tampered messages are rejected.
-* The user is then added to the set of currently connected users.
-*A system notification is broadcast to the other users.
-
-# Sending a Message
-* The user enters a message in the frontend.
-* The client signs the plaintext using its private RSA key.
-* The signed message is sent to the backend.
-* The server verifies the signature.
-* If verification fails, the message is rejected.
-* If verification succeeds, the message is encrypted using AES-GCM.
-* The encrypted message and its metadata are stored in SQLite.
-* The message is broadcast to all connected clients.
- 
-# Disconnecting
-
-When a user disconnects:
-
-* The server removes the WebSocket connection from the active users.
-* The username is removed from the active user list.
-* A system message notifying the remaining users is broadcast.
-  
-## Database Structure
-
-The SQLite database contains a messages table with the following fields:
-
-* **id:**	Unique message identifier
-* **username:**	Username of the sender
-* **public_key:**	Public key used to verify the message signature
-* **ciphertext:**	AES-GCM encrypted message
-* **nonce:**	AES-GCM nonce used for encryption
-* **signature:**	RSA-PSS signature of the plaintext message
-* **timestamp:**	UTC timestamp of the message
-
-The plaintext message itself is not stored in the database.
-
-## Running the Application
-# Backend
-
-Install the Python dependencies:
-```python
-pip install websockets cryptography
-```
-Start the server:
-```python
-python server.py --port <port> --name <backend-name>
-```
-The WebSocket server runs on port 9000 by default.
-The backend WebSocket server uses the configured port, while its health endpoint runs on another port (PORT - 1000).
-
-Multiple backend instances can therefore be started using different ports.
-For secure deployment, the backend uses TLS and accepts secure WebSocket connections through:
-```code
-wss://<server-ip>:9000
+```bash
+python3 server.py --port 6000 --api_port 5000 --name backend1
 ```
 
-# Go Load Balancer
+Run one instance per backend, each with a distinct `--port` (WebSocket) and `--api_port` (HTTP API). Repeat for as many backends as desired (this deployment uses six).
 
-The load balancer is implemented separately in Go.
+Each backend expects:
+- A running Redis instance (host/port configured at the top of `server.py`)
+- A running PostgreSQL instance with a database/user matching the configured `DB_NAME`/`DB_USER`/`DB_PASSWORD`
+- TLS certificate/key files for the WebSocket listener
 
-Build the load balancer:
-```code
-go build
-```
-Run the load balancer:
-```code
-./<load-balancer>
-```
-The load balancer maintains the configured backend pool and distributes new WebSocket connections among healthy backends using round-robin scheduling.
-# Frontend
+### 2. Build and start the load balancer
 
-Install the frontend dependencies:
-```code
-cd chat-frontend
-npm install
-```
-Start the Vite development server:
-```code
-npm run dev
-```
-For HTTPS deployment, the Vite server is configured with the server's TLS certificate and private key.
+```bash
+go build -o loadbalancer main.go
 
-The frontend is then accessed using:
-```code
-https://<server-ip>:<frontend-port>
-```
-The frontend connects to the backend using:
-```code
-wss://<server-ip>:9000
-```
-The frontend connects to the Go load balancer using:
-```code
-wss://<load-balancer-ip>:<load-balancer-port>
+./loadbalancer \
+  -backends "<WS_URL_1>,<API_URL_1>;<WS_URL_2>,<API_URL_2>;..." \
+  -threshold 0.60
 ```
 
-# HTTPS and WSS
+Example:
 
-Because the browser's Web Crypto API requires a secure context, the deployed frontend is served over HTTPS.
-
-The WebSocket connection is also secured using WSS:
-```text
-Browser
-   │
-   │ HTTPS
-   ▼
-React / Vite Frontend
-   │
-   │ WSS
-   ▼
-Python WebSocket Backend
-```
-For development, a self-signed TLS certificate may be used. Browsers will display a certificate warning because the certificate is not issued by a trusted certificate authority.
-
-The current deployment uses TLS certificates for secure communication, with the Go load-balancing layer serving as the entry point for client WebSocket traffic.
-
-# Monitoring and Health
-
-The Go load balancer includes monitoring information for the backend pool.
-
-The load balancer can track information such as:
-
-* Number of active backend connections.
-* Backend health status.
-* Requests/connections routed to each backend.
-* Availability of backend servers.
-
-This makes it possible to observe how traffic is distributed and demonstrate the effect of backend failures on the system.
-
-```text
-Project Structure
-chat-app/
-├── backend
-│   └── server.py
-├── chat-frontend
-│   ├── eslint.config.js
-│   ├── index.html
-│   ├── package.json
-│   ├── public
-│   │   ├── favicon.svg
-│   │   └── icons.svg
-│   ├── README.md
-│   ├── src
-│   │   ├── App.css
-│   │   ├── App.jsx
-│   │   ├── assets
-│   │   │   ├── hero.png
-│   │   │   ├── react.svg
-│   │   │   └── vite.svg
-│   │   ├── index.css
-│   │   └── main.jsx
-│   └── vite.config.js
-├── load-balancer
-│   ├── go.mod
-│   └── main.go
-├── load-generator
-│   ├── go.mod
-│   ├── go.sum
-│   └── main.go
-└── README.md
+```bash
+./loadbalancer \
+  -backends "https://10.1.75.51:4266,http://10.1.75.51:3266;https://10.1.75.51:6266,http://10.1.75.51:5266;https://10.1.75.51:4267,http://10.1.75.51:3267;https://10.1.75.51:6267,http://10.1.75.51:5267;https://10.1.75.51:4268,http://10.1.75.51:3268;https://10.1.75.51:6268,http://10.1.75.51:5268" \
+  -threshold 0.60
 ```
 
-## Technologies Used
-* Python
-* ``websockets``
-* ``cryptography``
-* SQLite
-* React
-* Vite
-* JavaScript
-* HTML/CSS
-* Web Crypto API
-* AES-GCM
-* RSA-PSS
-* HTTPS
-* WSS
-* Go
-* Reverse-proxy and Load Balancing
+`-threshold` is the CPU fraction (0.0–1.0) above which the load balancer prefers routing to a different backend. This deployment uses **0.60** (60%) as the tuned operating threshold.
+
+The load balancer listens on `:7000` by default (deployed here behind port **7265**).
+
+### 3. Run the load generator
+
+```bash
+python3 load_generator.py \
+  --url http://<load-balancer-host>:<port>/message \
+  --users 100 \
+  --duration 60 \
+  --min-length 50 \
+  --max-length 500 \
+  --min-interval 2 \
+  --max-interval 3
+```
+
+This produces:
+- `latency.csv` — per-request timestamp, user ID, response time, and status (HTTP code, timeout, or connection error)
+- `utilization.csv` — per-second CPU%, memory%, and persistence total/success/failed for each backend
+
+### 4. Generate graphs
+
+```bash
+python3 visualize.py
+```
+
+Produces plots (stored under `graphs/`) for CPU utilization over time, memory utilization over time, persistence operations over time, persistence success/failure, response time over time, and response time distribution — one set per load test run.
+
+## Load Testing Results
+
+All tests below used: `--duration 60 --min-length 50 --max-length 500 --min-interval 2 --max-interval 3`, CPU threshold = 60%.
+
+| Users | Requests | Success Rate | Avg Latency | P50 | P95 | P99 |
+|------:|---------:|-------------:|------------:|----:|----:|----:|
+| 1     | 48       | 100%          | 30 ms       | 29 ms | 43 ms | 44 ms |
+| 20    | 477      | 100%          | 48 ms       | 36 ms | 95 ms | 215 ms |
+| 100   | 2,367    | 100%          | 81 ms       | 60 ms | 201 ms | 929 ms |
+| 200   | 4,538    | 100%          | 201 ms      | 109 ms | 519 ms | 2,264 ms |
+| 600   | 7,453    | 95.6%         | 2,435 ms    | 1,695 ms | 7,184 ms | 9,030 ms |
+| 1,000 | 12,162   | 92.3%         | 2,462 ms    | 2,066 ms | 7,191 ms | 8,623 ms |
+
+**Summary of operating regions:**
+- **Low load (1–20 users):** 100% success, latency in the tens of milliseconds — negligible contention.
+- **Moderate load (100–200 users):** 100% success from the client's perspective, but P99 latency climbs into the seconds — CPU utilization becomes significant even while requests still complete.
+- **Extreme load (600–1,000 users):** Success rate drops to 92–96%, P95/P99 latency reaches 7–9 seconds — the system is saturated. CPU on multiple backends repeatedly hits 100%, while memory stays flat around 21–22% throughout, confirming CPU (not memory) as the binding resource.
+
+Backend-side persistence metrics recorded `persistence_success ≈ persistence_total` with `persistence_failed = 0` across all runs, including under extreme load — demonstrating that **request-level failure and persistence failure are distinct phenomena**: a client-visible failure does not necessarily mean the corresponding write was lost, and a message that does reach a backend is written durably.
+
+## Known Bottlenecks and Limitations
+
+Diagnosed during load testing and worth documenting for anyone extending this project:
+
+- **Redis connection pool exhaustion** — under high concurrency, backends can raise `PoolError('connection pool exhausted')` when demand for Redis connections exceeds the configured pool size. This is a resource-sizing issue, not a Redis outage.
+- **Load-generator file descriptor limits** — at very high concurrency (600+ simulated users), the load generator itself can hit `[Errno 24] Too many open files`, meaning some "failures" originate from the *test client's* OS limits rather than the backend. Raise `ulimit -n` on the load-generator host before high-concurrency runs.
+- **Health-check timeouts under load** — when a backend is heavily loaded, `/health` requests can time out even though the backend is technically reachable; this is recorded as a missing (not zero) value in monitoring data, since a timeout does not mean 0% utilization.
+- **CPU is the dominant bottleneck** — memory remained stable (~21–22%) across all tested loads; CPU saturation on backend processes is what limits throughput at scale.
+- **HTTP keep-alive matters** — the backend HTTP handler uses `protocol_version = "HTTP/1.1"` so the load balancer's connection pool can reuse TCP connections instead of paying a full handshake per request.
+
+## AI Citation
+
+AI (ChatGPT) was used in gathering material and formulating/creating the documentation for the accompanying report, in accordance with the code and repository details and requirements for execution of the code.
