@@ -118,9 +118,81 @@ plt.savefig(
 
 plt.close()
 
+# ============================================================
+# 4. PERSISTENCE OPERATIONS
+# ============================================================
+
+plt.figure(figsize=(12, 6))
+
+for i in range(1, 7):
+    column = f"system{i}_persistence_total"
+
+    if column in utilization.columns:
+        plt.plot(
+            utilization["timestamp"],
+            utilization[column],
+            label=f"Backend {i}"
+        )
+
+plt.xlabel("Time")
+plt.ylabel("Persistence Operations")
+plt.title("Persistence Operations Over Time")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.xticks(rotation=45)
+plt.tight_layout()
+
+plt.savefig(
+    OUTPUT_DIR / "persistence_over_time.png",
+    dpi=300
+)
+
+plt.close()
+
 
 # ============================================================
-# 4. Response-time distribution
+# 4. PERSISTENCE SUCCESS / FAILURE
+# ============================================================
+
+plt.figure(figsize=(12, 6))
+
+for i in range(1, 7):
+    success_column = f"system{i}_persistence_success"
+    failed_column = f"system{i}_persistence_failed"
+
+    if success_column in utilization.columns:
+        plt.plot(
+            utilization["timestamp"],
+            utilization[success_column],
+            label=f"Backend {i} Success"
+        )
+
+    if failed_column in utilization.columns:
+        plt.plot(
+            utilization["timestamp"],
+            utilization[failed_column],
+            linestyle="--",
+            label=f"Backend {i} Failed"
+        )
+
+plt.xlabel("Time")
+plt.ylabel("Persistence Operations")
+plt.title("Persistence Success and Failure")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.xticks(rotation=45)
+plt.tight_layout()
+
+plt.savefig(
+    OUTPUT_DIR / "persistence_success_failures.png",
+    dpi=300
+)
+
+plt.close()
+
+
+# ============================================================
+# 5. Response-time distribution
 # ============================================================
 
 plt.figure(figsize=(10, 6))
@@ -146,7 +218,7 @@ plt.close()
 
 
 # ============================================================
-# 5. P50 / P95 / P99 response time
+# 6. P50 / P95 / P99 response time
 # ============================================================
 
 p50 = latency["response_time_ms"].quantile(0.50)
@@ -191,7 +263,7 @@ plt.close()
 
 
 # ============================================================
-# 6. Average CPU utilization
+# 7. Average CPU utilization
 # ============================================================
 
 cpu_columns = [
@@ -226,7 +298,7 @@ plt.close()
 
 
 # ============================================================
-# 7. Average memory utilization
+# 8. Average memory utilization
 # ============================================================
 
 memory_columns = [

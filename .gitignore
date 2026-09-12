@@ -2,7 +2,6 @@ node_modules/
 dist/
 __pycache__/
 .venv/
-encryption.key
 chat.db
 .env
 .DS_Store

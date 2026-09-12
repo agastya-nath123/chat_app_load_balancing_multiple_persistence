@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(
-    pool_connections=200,
-    pool_maxsize=200,
+    pool_connections=2000,
+    pool_maxsize=2000,
     max_retries=0,
 )
 session.mount("http://", adapter)
@@ -57,18 +57,42 @@ utilization_writer = csv.writer(utilization_file)
 
 utilization_writer.writerow([
     "timestamp",
+
     "system1_cpu",
     "system1_memory",
+    "system1_persistence_total",
+    "system1_persistence_success",
+    "system1_persistence_failed",
+
     "system2_cpu",
     "system2_memory",
+    "system2_persistence_total",
+    "system2_persistence_success",
+    "system2_persistence_failed",
+
     "system3_cpu",
     "system3_memory",
+    "system3_persistence_total",
+    "system3_persistence_success",
+    "system3_persistence_failed",
+
     "system4_cpu",
     "system4_memory",
+    "system4_persistence_total",
+    "system4_persistence_success",
+    "system4_persistence_failed",
+
     "system5_cpu",
     "system5_memory",
+    "system5_persistence_total",
+    "system5_persistence_success",
+    "system5_persistence_failed",
+
     "system6_cpu",
-    "system6_memory"
+    "system6_memory",
+    "system6_persistence_total",
+    "system6_persistence_success",
+    "system6_persistence_failed"
 ])
 
 utilization_lock = threading.Lock()
@@ -96,6 +120,8 @@ class LoadGenerator:
         self.total = 0
         self.success = 0
         self.failed = 0
+        self.connection_errors = 0
+        self.timeouts = 0
 
         self.latencies = []
 
@@ -147,6 +173,12 @@ class LoadGenerator:
                     else:
                         self.failed += 1
 
+            except requests.Timeout:
+                with self.lock:
+                    self.total += 1
+                    self.failed += 1
+                    self.timeouts += 1
+
             except requests.RequestException:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 with latency_lock:
@@ -161,6 +193,7 @@ class LoadGenerator:
                 with self.lock:
                     self.total += 1
                     self.failed += 1
+                    self.connection_errors += 1
                     self.latencies.append(elapsed)
 
 
@@ -238,6 +271,8 @@ class LoadGenerator:
             success = self.success
             failed = self.failed
             latencies = list(self.latencies)
+            timeouts = self.timeouts
+            connection_errors = self.connection_errors
 
         if latencies:
             latencies.sort()
@@ -276,6 +311,8 @@ class LoadGenerator:
         print(f"Total requests:    {total}")
         print(f"Successful:        {success}")
         print(f"Failed:            {failed}")
+        print(f"Timeouts:            {timeouts}")
+        print(f"Connection errors:            {connection_errors}")
         print(f"Success rate:      {success_rate:.2f}%")
         print(f"Requests/sec:      {requests_per_second:.2f}")
 
@@ -307,12 +344,16 @@ def get_system_utilization(name):
         data = response.json()
 
         return (
-            data.get("cpu_percent"),
-            data.get("memory_percent")
+        data.get("cpu_percent"),
+        data.get("memory_percent"),
+        data.get("persistence_total", 0),
+        data.get("persistence_success", 0),
+        data.get("persistence_failed", 0),
         )
 
-    except Exception:
-        return None, None
+    except Exception as e:
+        print(f"Health check failed for {name}: {repr(e)}")
+        return None, None, None, None, None
 
 def collect_utilization(stop_event):
 
@@ -353,13 +394,14 @@ def collect_utilization(stop_event):
             "system5",
             "system6"
         ]:
-            cpu, memory = results.get(
-                name,
-                (None, None)
-            )
+            cpu, memory, persistence_total, persistence_success, persistence_failed = results.get(
+                name, (None, None, None, None, None))
 
             row.append(cpu)
             row.append(memory)
+            row.append(persistence_total)
+            row.append(persistence_success)
+            row.append(persistence_failed)
 
         with utilization_lock:
             utilization_writer.writerow(row)
