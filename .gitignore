@@ -10,3 +10,5 @@ chat.db
 results/
 load-generator
 load-balancer
+graphs/
+*.csv
