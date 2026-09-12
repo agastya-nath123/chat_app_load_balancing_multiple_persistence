@@ -9,6 +9,8 @@ import os
 import time
 import json
 import psycopg2
+from psycopg2 import pool
+from contextlib import contextmanager
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
@@ -86,6 +88,7 @@ ssl_context.load_cert_chain(
 
 public_key_cache = {}
 public_key_cache_lock = threading.Lock()
+public_keys_lock = threading.Lock()
 # ---------------------------------------------------------
 # Encryption key
 # ---------------------------------------------------------
@@ -105,14 +108,28 @@ def load_encryption_key():
 ENCRYPTION_KEY = load_encryption_key()
 aes = AESGCM(ENCRYPTION_KEY)
 
+db_pool = psycopg2.pool.ThreadedConnectionPool(
+    minconn=5,
+    maxconn=20,
+    host=DB_HOST,
+    port=DB_PORT,
+    database=DB_NAME,
+    user=DB_USER,
+    password=DB_PASSWORD,
+)
+
+@contextmanager
 def get_db_connection():
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-    )
+    connection = db_pool.getconn()
+
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        db_pool.putconn(connection)
 
 def init_db():
     """Create PostgreSQL tables if they do not exist."""
@@ -142,8 +159,6 @@ def init_db():
                 )
                 """
             )
-
-        connection.commit()
 
 def store_message(message_id, username, public_key, ciphertext, nonce, signature, timestamp):
 
@@ -184,8 +199,6 @@ def store_message(message_id, username, public_key, ciphertext, nonce, signature
                     timestamp,
                 ),
             )
-
-        connection.commit()
 
 def load_history(limit=HISTORY_LIMIT):
     """Load the most recent messages."""
@@ -256,7 +269,6 @@ def save_public_key(username, public_key):
                 (username, public_key),
             )
 
-        connection.commit()
 
 def load_public_key(username):
     """Load a user's public key."""
@@ -461,7 +473,10 @@ async def register_user(websocket):
         return None
 
     # Store public key in memory and database.
-    public_keys[username] = public_key
+    with public_keys_lock:
+        public_keys[username] = public_key
+    with public_key_cache_lock:
+        public_key_cache[username] = public_key
     await asyncio.to_thread(
         save_public_key,
         username,
@@ -473,8 +488,13 @@ async def register_user(websocket):
 
 async def unregister_user(websocket):
     """Remove a client from the connected users."""
-    return users.pop(websocket, None)
+    username = users.pop(websocket, None)
 
+    if username is not None:
+        with public_keys_lock:
+            public_keys.pop(username, None)
+
+    return username
 
 # ---------------------------------------------------------
 # Client handler
@@ -578,8 +598,11 @@ async def handle_client(websocket):
 
             print(f"{username}: {message}")
 
+            with public_keys_lock:
+                public_key = public_keys.get(username)
+
             signature_valid = verify_signature(
-                public_keys[username],
+                public_key,
                 message,
                 signature,
                 )
@@ -610,10 +633,13 @@ async def handle_client(websocket):
 
             message_id = str(uuid.uuid4())
 
+            with public_keys_lock:
+                public_key = public_keys.get(username)
+
             payload = {
                 "id": message_id,
                 "username": username,
-                "public_key": public_keys[username],
+                "public_key": public_key,
                 "ciphertext": base64.b64encode(ciphertext).decode(),
                 "nonce": base64.b64encode(nonce).decode(),
                 "signature": base64.b64encode(signature).decode(),
@@ -789,7 +815,10 @@ class APIHandler(BaseHTTPRequestHandler):
             # Get the user's public key if your application
             # requires it.
             start = time.perf_counter()
-            public_key = load_public_key(client_name)
+            with public_keys_lock:
+                public_key = public_keys.get(username)
+            if public_key is None:
+                public_key = load_public_key(client_name)
             key_load_time = time.perf_counter() - start
 
 
