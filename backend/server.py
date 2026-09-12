@@ -260,14 +260,26 @@ def save_public_key(username, public_key):
 
 def load_public_key(username):
     """Load a user's public key."""
+    start = time.perf_counter()
 
     # Check cache first
     with public_key_cache_lock:
         if username in public_key_cache:
+            elapsed = time.perf_counter() - start
+            print(
+                f"{NAME}: CACHE HIT {username} "
+                f"({elapsed * 1000:.2f}ms)"
+            )
             return public_key_cache[username]
 
     # Not cached, query PostgreSQL
+    cache_check_time = time.perf_counter()
+    print(f"{NAME}: CACHE MISS {username}")
+
+    connection_start = time.perf_counter()
     with get_db_connection() as connection:
+        connection_time = time.perf_counter() - connection_start
+        query_start = time.perf_counter()
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -279,6 +291,15 @@ def load_public_key(username):
             )
 
             row = cursor.fetchone()
+        query_time = time.perf_counter() - query_start
+    total_time = time.perf_counter() - start
+
+    print(
+        f"{NAME}: "
+        f"connection={connection_time * 1000:.2f}ms "
+        f"query={query_time * 1000:.2f}ms "
+        f"total={total_time * 1000:.2f}ms"
+    )
 
     if row is None:
         return None
