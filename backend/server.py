@@ -966,7 +966,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
 class APIServer(ThreadingHTTPServer):
     allow_reuse_address = True
-    request_queue_size = 128
+    request_queue_size = 1000
     daemon_threads = True
 
 def start_api_server():
