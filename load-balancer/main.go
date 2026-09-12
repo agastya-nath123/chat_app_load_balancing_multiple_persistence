@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -99,75 +100,56 @@ func (m *Metrics) percentiles() (
 	return p50, p95, p99
 }
 
+func backendScore(backend *Backend) float64 {
+    cpu := float64(backend.CPUPercent.Load()) / 100.0
+    memory := float64(backend.MemoryPercent.Load()) / 100.0
+    inFlight := float64(backend.InFlight.Load())
+
+    return cpu*0.7 + memory*0.2 + inFlight*0.1
+}
+
 func (lb *LoadBalancer) nextBackend() *Backend {
-	var best *Backend
+    var best *Backend
+    bestScore := math.Inf(1)
 
-	cpuThreshold := lb.CPUThreshold
+    for _, backend := range lb.backends {
+        if !backend.Alive.Load() {
+            continue
+        }
 
-	// First pass:
-	// Find the healthy backend with the lowest CPU
-	// among those below the threshold.
-	for _, backend := range lb.backends {
-		if !backend.Alive.Load() {
-			continue
-		}
+        cpu := float64(backend.CPUPercent.Load()) / 100.0
 
-		cpu := float64(backend.CPUPercent.Load()) / 100.0
+        // Prefer backends below threshold.
+        if cpu >= lb.CPUThreshold {
+            continue
+        }
 
-		if cpu >= cpuThreshold {
-			continue
-		}
+        score := backendScore(backend)
 
-		if best == nil {
-			best = backend
-			continue
-		}
+        if score < bestScore {
+            best = backend
+            bestScore = score
+        }
+    }
 
-		bestCPU := float64(best.CPUPercent.Load()) / 100.0
+    // All healthy backends exceeded threshold.
+    // Use the least-loaded healthy backend anyway.
+    if best == nil {
+        for _, backend := range lb.backends {
+            if !backend.Alive.Load() {
+                continue
+            }
 
-		if cpu < bestCPU {
-			best = backend
-			continue
-		}
+            score := backendScore(backend)
 
-		// CPU is equal, use in-flight requests as tie-breaker.
-		if cpu == bestCPU &&
-			backend.InFlight.Load() < best.InFlight.Load() {
-			best = backend
-		}
-	}
+            if best == nil || score < bestScore {
+                best = backend
+                bestScore = score
+            }
+        }
+    }
 
-	if best != nil {
-		return best
-	}
-
-	// If every healthy backend is above the threshold,
-	// choose the healthy backend with the lowest CPU.
-	for _, backend := range lb.backends {
-		if !backend.Alive.Load() {
-			continue
-		}
-
-		if best == nil {
-			best = backend
-			continue
-		}
-
-		cpu := float64(backend.CPUPercent.Load()) / 100.0
-		bestCPU := float64(best.CPUPercent.Load()) / 100.0
-
-		if cpu < bestCPU {
-			best = backend
-			continue
-		}
-
-		if cpu == bestCPU &&
-			backend.InFlight.Load() < best.InFlight.Load() {
-			best = backend
-		}
-	}
-
-	return best
+    return best
 }
 
 func (lb *LoadBalancer) statusHandler(
@@ -218,6 +200,12 @@ func (lb *LoadBalancer) ServeHTTP(
 		lb.metricsHandler(w, r)
 		return
 	}
+
+	if r.URL.Path != "/message" &&
+       r.URL.Path != "/feed" {
+        http.NotFound(w, r)
+        return
+    }
 
 	lb.metrics.Total.Add(1)
 
@@ -300,7 +288,7 @@ type HealthResponse struct {
 
 func (lb *LoadBalancer) checkBackend(backend *Backend) {
 	client := &http.Client{
-		Timeout: 2 * time.Second,
+		Timeout: 1 * time.Second,
 	}
 
 	resp, err := client.Get(
@@ -472,7 +460,7 @@ func main() {
 
 	lb := &LoadBalancer{
 		backends:      backends,
-		CPUThreshold: 70.0,
+		CPUThreshold: 0.70,
 	}
 
 	_ = lb
