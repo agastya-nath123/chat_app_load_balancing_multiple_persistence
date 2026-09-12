@@ -482,10 +482,12 @@ func main() {
 
 	log.Println("Load balancer listening on :7000")
 
-	log.Fatal(server.ListenAndServeTLS(
-		"/home/student/chat-ssl/cert.pem",
-		"/home/student/chat-ssl/key.pem",
-	))
+	//log.Fatal(server.ListenAndServeTLS(
+	//	"/home/student/chat-ssl/cert.pem",
+	//	"/home/student/chat-ssl/key.pem",
+	//))
+
+	log.Fatal(server.ListenAndServe())
 
 	log.Println("Load balancer starting...")
 }
