@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 )
-const consecutiveFailureThreshold = 3
+const consecutiveFailureThreshold = 5
 const maxAttempts = 3
 
 type Backend struct {
@@ -510,7 +510,7 @@ type HealthResponse struct {
 
 func (lb *LoadBalancer) checkBackend(backend *Backend) {
 	client := &http.Client{
-		Timeout: 1 * time.Second,
+		Timeout: 3 * time.Second,
 	}
 
 	resp, err := client.Get(
@@ -583,7 +583,7 @@ func (lb *LoadBalancer) checkBackend(backend *Backend) {
 }
 
 func (lb *LoadBalancer) healthWorker(backend *Backend) {
-    ticker := time.NewTicker(1 * time.Second)
+    ticker := time.NewTicker(2 * time.Second)
     defer ticker.Stop()
 
     for {
