@@ -72,7 +72,7 @@ DB_PASSWORD = "agastya"
 KEY_PATH = Path(__file__).with_name("encryption.key")
 
 # Number of most recent messages sent to a user when they join.
-HISTORY_LIMIT = 50
+HISTORY_LIMIT = 1000
 
 # Maps each WebSocket connection to its username.
 users = {}
@@ -308,7 +308,7 @@ def get_feed_cached():
         ):
             return feed_cache["data"]
 
-    data = load_history(limit=None)
+    data = load_history(limit=HISTORY_LIMIT)
 
     with feed_cache_lock:
         feed_cache["data"] = data
