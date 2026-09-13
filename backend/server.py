@@ -60,6 +60,8 @@ redis_client = redis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
     decode_responses=True,
+    socket_timeout=2,
+    socket_connect_timeout=2,
 )
 
 DB_HOST = "localhost"
