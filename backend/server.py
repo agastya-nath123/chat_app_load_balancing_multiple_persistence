@@ -238,22 +238,36 @@ def load_history(limit=HISTORY_LIMIT):
 
     with get_db_connection() as connection:
         with connection.cursor() as cursor:
-
-            cursor.execute(
-                """
-                SELECT
-                    username,
-                    public_key,
-                    ciphertext,
-                    nonce,
-                    signature,
-                    timestamp
-                FROM messages
-                ORDER BY timestamp DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
+            if limit is None:
+                cursor.execute(
+                    """
+                    SELECT
+                        username,
+                        public_key,
+                        ciphertext,
+                        nonce,
+                        signature,
+                        timestamp
+                    FROM messages
+                    ORDER BY timestamp DESC
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT
+                        username,
+                        public_key,
+                        ciphertext,
+                        nonce,
+                        signature,
+                        timestamp
+                    FROM messages
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
 
             rows = cursor.fetchall()
 
@@ -292,7 +306,7 @@ def get_feed_cached():
         ):
             return feed_cache["data"]
 
-    data = load_history()
+    data = load_history(limit=None)
 
     with feed_cache_lock:
         feed_cache["data"] = data
@@ -574,7 +588,7 @@ async def handle_client(websocket):
     # Send recent chat history to the new user only.
     # This must happen BEFORE adding the client to `users`, otherwise a
     # broadcast could reach it before it has received the history.
-    history = await asyncio.to_thread(get_feed_cached)
+    history = await asyncio.to_thread(load_history)
 
     decrypted_history = []
 
