@@ -574,7 +574,7 @@ async def handle_client(websocket):
     # Send recent chat history to the new user only.
     # This must happen BEFORE adding the client to `users`, otherwise a
     # broadcast could reach it before it has received the history.
-    history = await asyncio.to_thread(load_history)
+    history = await asyncio.to_thread(get_feed_cached)
 
     decrypted_history = []
 
@@ -1001,6 +1001,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         "error": "Internal server error"
                     }
                 )
+            return
 
         self.send_json(
             404,
