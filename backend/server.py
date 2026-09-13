@@ -123,7 +123,12 @@ db_pool = psycopg2.pool.ThreadedConnectionPool(
     user=DB_USER,
     password=DB_PASSWORD,
 )
+
 db_semaphore = asyncio.Semaphore(10)
+
+feed_cache = {"data": None, "timestamp": 0}
+feed_cache_lock = threading.Lock()
+FEED_CACHE_TTL = 0.2  # seconds
 
 @contextmanager
 def get_db_connection(max_retries=5, base_delay=0.05):
@@ -276,6 +281,24 @@ def load_history(limit=HISTORY_LIMIT):
             timestamp,
         ) in reversed(rows)
     ]
+
+def get_feed_cached():
+    now = time.time()
+
+    with feed_cache_lock:
+        if (
+            feed_cache["data"] is not None
+            and (now - feed_cache["timestamp"]) < FEED_CACHE_TTL
+        ):
+            return feed_cache["data"]
+
+    data = load_history()
+
+    with feed_cache_lock:
+        feed_cache["data"] = data
+        feed_cache["timestamp"] = time.time()
+
+    return data
 
 def save_public_key(username, public_key):
     """Save or update a user's public key."""
@@ -929,7 +952,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
             try:
 
-                messages = load_history()
+                messages = get_feed_cached()
                 
                 plaintext_messages = []
 
