@@ -308,13 +308,12 @@ def get_feed_cached():
         ):
             return feed_cache["data"]
 
-    data = load_history(limit=HISTORY_LIMIT)
+        data = load_history(limit=HISTORY_LIMIT)
 
-    with feed_cache_lock:
         feed_cache["data"] = data
         feed_cache["timestamp"] = time.time()
 
-    return data
+        return data
 
 def save_public_key(username, public_key):
     """Save or update a user's public key."""
