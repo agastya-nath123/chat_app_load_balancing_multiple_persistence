@@ -94,16 +94,34 @@ place but not exercised on the hot path as the code stands.
 chat_app_load_balancing/
 ├── backend/
 │   └── server.py                         # WebSocket + HTTP API backend
-├── load-balancer/
-│   └── main.go                           # Go load balancer
-├── python-message-load-generator/
+├── load-balancer                         # Go Load Balancer/Reverse-proxy
+│   ├── go.mod
+│   └── main.go                           # Main code for load balancer
+├── load-generator 
+│   ├── go.mod
+│   ├── go.sum
+│   └── main.go
+├─ python-message-load-generator/
 │   ├── load_generator.py                 # Multi-threaded load generator
 │   ├── visualize.py                      # Graph generation from CSV output
 │   └── graphs/                           # Generated PNGs (created on first run)
-└── chat-frontend/
-    ├── src/
-    │   └── App.jsx                       # React chat client
+└── chat-frontend/                        # Websocket React Chat-App Frontend
+    ├── eslint.config.js
+    ├── index.html
     ├── package.json
+    ├── public
+    │   ├── favicon.svg
+    │   └── icons.svg
+    ├── README.md
+    ├── src
+    │   ├── App.css                       Main CSS code for frontend
+    │   ├── App.jsx                       Main JSX code for frontend
+    │   ├── assets
+    │   │   ├── hero.png
+    │   │   ├── react.svg
+    │   │   └── vite.svg
+    │   ├── index.css
+    │   └── main.jsx
     └── vite.config.js
 ```
 
