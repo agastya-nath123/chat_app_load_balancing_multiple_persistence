@@ -28,7 +28,6 @@ in-flight-request measurements.
 14. [Generating Graphs](#14-generating-graphs)
 15. [Configuration Reference](#15-configuration-reference)
 16. [Troubleshooting](#16-troubleshooting)
-17. [AI Citation](#17-ai-citation)
 
 ---
 
@@ -817,8 +816,3 @@ healthy only after the first successful poll — give it a few seconds after sta
 
 ---
 
-## 17. AI Citation
-
-AI (ChatGPT) was used in gathering material and in formulating and creating the project
-documentation, in accordance with the code and repository details and the prerequisites for
-executing the code.
